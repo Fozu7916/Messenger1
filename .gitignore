@@ -1,0 +1,52 @@
+# =========================
+# Секреты и локальные конфиги
+# =========================
+.env
+.env.*
+!.env.example
+*.secret.*
+appsettings.Development.json
+appsettings.Local.json
+
+# =========================
+# Backend (C# .NET)
+# =========================
+# Скомпилированные бинарники и промежуточные файлы сборки
+[Bb]in/
+[Oo]bj/
+# Файлы пользовательских настроек IDE
+*.user
+*.suo
+*.sln.docstates
+# Кеш и логи Rider / Visual Studio
+.idea/
+.vs/
+*.log
+
+# =========================
+# Frontend (React + TypeScript)
+# =========================
+# Зависимости
+node_modules/
+.pnp
+.pnp.js
+# Результаты продакшн-сборки
+dist/
+build/
+# Логи npm / yarn
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+# Отчеты о покрытии тестами
+coverage/
+
+# =========================
+# Системные файлы ОС (Windows / macOS)
+# =========================
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
