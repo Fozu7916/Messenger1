@@ -16,7 +16,7 @@ public sealed class DatabaseTests
 
         await using var db = new MessengerDbContext(options);
 
-        var user = new User("test-user");
+        var user = new User($"test-user-{Guid.NewGuid():N}");
 
         var conversation = new Conversation();
 
@@ -35,6 +35,23 @@ public sealed class DatabaseTests
         db.Messages.Add(message);
 
         await db.SaveChangesAsync();
+
+        var savedConversation = await db.Conversations
+            .AsNoTracking()
+            .SingleOrDefaultAsync(x => x.Id == conversation.Id);
+
+        Assert.NotNull(savedConversation);
+        Assert.Equal(conversation.Id, savedConversation.Id);
+        Console.WriteLine($"Conversation ID: {conversation.Id}");
+        Console.WriteLine($"User ID: {user.Id}");
+
+        var conversationExists = await db.Conversations
+            .AsNoTracking()
+            .AnyAsync(x => x.Id == conversation.Id);
+
+        Console.WriteLine($"Conversation exists: {conversationExists}");
+
+        Assert.True(conversationExists);
 
         var savedMessage = await db.Messages
             .AsNoTracking()
