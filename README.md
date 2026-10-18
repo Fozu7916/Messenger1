@@ -1,74 +1,98 @@
-#messanger
+# Веб-мессенджер
 
-```mermaid
-flowchart LR
-    %% Стилизация узлов и дорожек
-    classDef swimlane fill:#f8f9fa,stroke:#dee2e6,stroke-width:2px,color:#212529;
-    classDef clientNode fill:#e3f2fd,stroke:#1e88e5,stroke-width:2px,color:#000;
-    classDef proxyNode fill:#e8f5e9,stroke:#43a047,stroke-width:2px,color:#000;
-    classDef logicNode fill:#f3e5f5,stroke:#8e24aa,stroke-width:2px,color:#000;
-    classDef dataNode fill:#fff3e0,stroke:#fb8c00,stroke-width:2px,color:#000;
+Веб-сервис для приватного общения в реальном времени прямо в браузере, без установки отдельного приложения.
 
-    subgraph L1 [1. Client Layer]
-        direction TB
-        React[React + TS Web]
-        RxDB[(RxDB / IndexedDB)]
-        React <-->|Чтение/Запись| RxDB
-    end
+## Возможности MVP
 
-    subgraph L2 [2. Edge / Proxy Layer]
-        direction TB
-        Nginx[Nginx Reverse Proxy]
-    end
+- Регистрация, авторизация и выход из аккаунта
+- Управление профилем
+- Поиск пользователей
+- Личные диалоги и список диалогов
+- Отправка и получение текстовых сообщений в реальном времени
+- История переписки, удаление сообщений и диалогов
+- Offline-First: сообщения не теряются при пропадании сети
+- Загрузка медиафайлов напрямую в S3 (через Pre-signed URL)
 
-    subgraph L3 [3. Business Logic Layer]
-        direction TB
-        SignalR[SignalR Hub - WSS]
-        REST[REST API - HTTP]
-    end
+## Технологии
 
-    subgraph L4 [4. Data & Storage Layer]
-        direction TB
-        Redis[(Redis - Backplane)]
-        Postgres[(PostgreSQL - ULID)]
-        S3[(S3 - Media Storage)]
-    end
+| Слой | Стек |
+|------|------|
+| Frontend | React, TypeScript, RxDB (IndexedDB) |
+| Proxy | Nginx |
+| Backend | C# .NET 10, SignalR (WSS), REST API, EF Core + Dapper |
+| Данные | PostgreSQL (ULID, партиционирование), Redis (backplane, presence), S3 |
 
-    %% Применение стилей к дорожкам и узлам через директиву class (строго внизу)
-    class L1,L2,L3,L4 swimlane;
-    class React,RxDB clientNode;
-    class Nginx proxyNode;
-    class SignalR,REST logicNode;
-    class Redis,Postgres,S3 dataNode;
+## Структура репозитория
 
-    %% Потоки данных (строго слева направо)
-    React ==>|WSS Сообщения| Nginx
-    React ==>|HTTP История/Медиа| Nginx
-    React -.->|Прямой PUT файла| S3
-
-    Nginx ==>|Upgrade to WSS| SignalR
-    Nginx ==>|Reverse Proxy HTTP| REST
-
-    SignalR <-->|Pub/Sub & Статусы| Redis
-    SignalR ==>|INSERT Dapper| Postgres
-    REST <-->|EF Core / Dapper| Postgres
-    REST -.->|Генерация Presigned URL| S3
-    
 ```
-**WSS** расшифровывается как **WebSocket Secure**
-Роли - бекенд, фронтенд, девопс, тестировшик
+Messenger1/
+├── backend/
+│   ├── Messenger.sln
+│   ├── src/Messenger.Api/       # REST API + SignalR Hub
+│   └── tests/Messenger.Tests/   # тесты бэкенда
+├── frontend/                    # React + TS, тесты фронтенда
+├── docker-compose.yml           # PostgreSQL, Redis, MinIO для разработки
+├── .env.example
+├── DOCUMENTATION.md             # документация
+└── README.md
+```
 
-### Слой клиентского приложения (TS, React, RxDB)
+## Быстрый старт
 
-Отвечает за реализацию архитектуры Offline-First и обеспечение мгновенного отклика интерфейса. Фронтенд не дожидается ответа от сервера: при отправке сообщения оно моментально записывается в локальную базу данных IndexedDB (через RxDB), и интерфейс перерисовывается (Optimistic UI). В фоновом режиме React-приложение поддерживает постоянное WSS-соединение для обмена событиями в реальном времени, а при выходе из оффлайна делает HTTP-запрос дельты сообщений, передавая серверу маркер последнего известного сообщения (`LastSyncULID`). Разработчик этого слоя также реализует логику загрузки тяжелых медиафайлов: клиент запрашивает у сервера короткоживущую ссылку (Pre-signed URL) и отправляет бинарные данные напрямую в объектное хранилище S3, полностью минуя бэкенд.
+### Требования
 
-### Слой маршрутизации и бизнес-логики (Nginx, C# .NET 8)
+- .NET SDK 10
+- Node.js 20+ и npm
+- Docker (PostgreSQL, Redis, S3-совместимое хранилище MinIO)
 
-Берет на себя распределение трафика и валидацию всех действий пользователей. Единой точкой входа выступает Nginx, который расшифровывает HTTPS-трафик и жестко разделяет его: обычные запросы проксируются на REST API, а сокеты повышаются (Upgrade) и уходят в SignalR. Внутри C#-бэкенда реализован гибридный доступ к данным (CQRS): для редких операций вроде смены имени используется Entity Framework Core, а для сверхчастой вставки тысяч сообщений в секунду — Dapper (прямые SQL-запросы без аллокаций памяти). На уровне SignalR также встроена система идемпотентности, которая проверяет уникальные ключи клиентских запросов и гарантирует, что если у пользователя моргнул интернет, сервер не создаст в базе дубликат сообщения.
+### Запуск инфраструктуры
 
-### Слой хранения данных (PostgreSQL, Redis, S3)
+```bash
+docker compose up -d
+```
 
-Обеспечивает персистентность, изоляцию нагрузок и возможность горизонтального масштабирования всей системы. Ядром выступает PostgreSQL, где для таблицы сообщений применяется партиционирование и сортируемые ключи ULID — это позволяет добавлять новые данные строго в конец таблицы, избегая фатальной фрагментации дисковых индексов. Оперативный кэш Redis работает в двух направлениях: как шина сообщений (Backplane) для трансляции событий между разными физическими серверами C# и как хранилище эфемерных статусов (Presence), забирая на себя весь мусорный трафик вроде «пользователь онлайн» или «печатает», чтобы не блокировать основную СУБД. Хранилище S3 работает автономно, выступая бездонным архивом для картинок и видео, оставляя реляционную базу легковесной.
+### Backend
 
+```bash
+cd backend
+dotnet restore
+dotnet run --project src/Messenger.Api
+```
 
-отдельно папка бекенда и фронтенда, так же писать тесты к фронту и к беку
+API слушает `http://localhost:5080`, Swagger — `http://localhost:5080/swagger`, SignalR Hub — `/hubs/chat`.
+В режиме Development схема БД создаётся автоматически.
+
+### Frontend
+
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+### Тесты
+
+```bash
+# backend (интеграционным тестам нужен запущенный Docker)
+cd backend && dotnet test
+
+# frontend
+cd frontend && npm test
+```
+
+## Конфигурация
+
+Секреты (строка подключения к БД, ключи S3, JWT-секрет) хранятся в переменных окружения или `.env`, который **не коммитится** в репозиторий. Пример — в `.env.example`.
+
+Имена переменных в формате ASP.NET Core, `__` означает вложенность:
+
+| Переменная | Назначение |
+|------------|------------|
+| `ConnectionStrings__Postgres` | Строка подключения к PostgreSQL |
+| `ConnectionStrings__Redis` | Redis для backplane (необязательно) |
+| `Jwt__Key` | Секрет подписи JWT, не короче 32 символов |
+| `Cors__Origins__0` | Разрешённый origin фронтенда |
+
+## Документация
+
+Подробное описание архитектуры, API, моделей данных, протоколов, безопасности, тестирования и статуса реализации — в [DOCUMENTATION.md](DOCUMENTATION.md).
