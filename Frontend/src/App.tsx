@@ -1,29 +1,38 @@
-import { useEffect, useState } from 'react';
-import { api, setUnauthorizedHandler, store, ui, type Session } from './api';
-import { Auth } from './Auth';
-import { ChatProvider } from './chat';
-import { Shell } from './Shell';
+import { useAuth } from './lib/auth';
+import { ChatProvider, useChat } from './lib/chat';
+import { usePersisted } from './lib/persist';
+import { AuthPage } from './components/AuthPage';
+import { ChatsPage } from './components/ChatsPage';
+import { SettingsPage } from './components/SettingsPage';
+import { Avatar } from './components/ui';
 
-export function App() {
-  const [session, setSession] = useState<Session | null>(() => store.load());
-  const [checked, setChecked] = useState(!session);
+export default function App() {
+  const { session } = useAuth();
+  return session ? <ChatProvider><Shell /></ChatProvider> : <AuthPage />;
+}
 
-  const logout = () => { store.clear(); ui.clear(); setSession(null); };
-  const save = (s: Session) => { store.save(s); setSession(s); };
+function Shell() {
+  const { session } = useAuth();
+  const { status, dbError, error } = useChat();
+  const [tab, setTab] = usePersisted<'chats' | 'settings'>('tab', 'chats');
+  const u = session!.user;
+  const net = { online: '● На связи', connecting: '◌ Подключение…', offline: '○ Офлайн' }[status];
 
-  useEffect(() => { setUnauthorizedHandler(logout); }, []);
-
-  // При старте проверяем токен: 401 → api вызовет logout; офлайн — работаем с локальными данными.
-  useEffect(() => {
-    if (!session) return;
-    api.me().then((user) => save({ ...session, user })).catch(() => {}).finally(() => setChecked(true));
-  }, []);
-
-  if (!session) return <Auth onAuth={save} />;
-  if (!checked) return null;
   return (
-    <ChatProvider key={session.user.id} me={session.user} onUser={(user) => save({ ...session, user })} onLogout={logout}>
-      <Shell />
-    </ChatProvider>
+    <div className="app">
+      <nav className="nav">
+        <div className="logo"><s />Мессенджер</div>
+        <div className="seg" role="tablist">
+          <button role="tab" aria-selected={tab === 'chats'} onClick={() => setTab('chats')}>Чаты</button>
+          <button role="tab" aria-selected={tab === 'settings'} onClick={() => setTab('settings')}>Настройки</button>
+        </div>
+        <span className="net" aria-live="polite" title={error || undefined}>{net}{error ? ' · ошибка синхронизации' : ''}</span>
+        <button className="me-btn" onClick={() => setTab('settings')} aria-label="Профиль и настройки">
+          <Avatar name={u.displayName} url={u.avatarUrl} size={32} />
+        </button>
+      </nav>
+      {dbError && <div className="warn">Локальная база недоступна: {dbError}</div>}
+      {tab === 'chats' ? <ChatsPage /> : <SettingsPage />}
+    </div>
   );
 }
