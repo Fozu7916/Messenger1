@@ -6,6 +6,8 @@ public interface IPresenceTracker
     bool UserConnected(string userId, string connectionId);
     /// <returns>true, если пользователь только что стал офлайн (закрыто последнее соединение).</returns>
     bool UserDisconnected(string userId, string connectionId);
+    /// <summary>Есть ли у пользователя хотя бы одно активное соединение.</summary>
+    bool IsOnline(string userId);
 }
 
 /// <summary>
@@ -26,6 +28,11 @@ public sealed class InMemoryPresenceTracker : IPresenceTracker
             set.Add(connectionId);
             return set.Count == 1;
         }
+    }
+
+    public bool IsOnline(string userId)
+    {
+        lock (_lock) return _connections.ContainsKey(userId);
     }
 
     public bool UserDisconnected(string userId, string connectionId)

@@ -2,10 +2,11 @@ import { useEffect, useState, type FormEvent } from 'react';
 import { useAuth } from '../lib/auth';
 import { useChat } from '../lib/chat';
 import { isHttpUrl } from '../lib/format';
+import { beep, desktopSupported, enableDesktop, getNotifyPrefs, setNotifyPrefs } from '../lib/notify';
 import { Avatar, useToast } from './ui';
 
-type Section = 'profile' | 'sync' | 'session';
-const SECTIONS: [Section, string][] = [['profile', 'Профиль'], ['sync', 'Синхронизация'], ['session', 'Сессия']];
+type Section = 'profile' | 'notify' | 'sync' | 'session';
+const SECTIONS: [Section, string][] = [['profile', 'Профиль'], ['notify', 'Уведомления'], ['sync', 'Синхронизация'], ['session', 'Сессия']];
 
 export function SettingsPage() {
   const [section, setSection] = useState<Section>('profile');
@@ -23,6 +24,7 @@ export function SettingsPage() {
       </aside>
       <section className="panel">
         {section === 'profile' && <ProfileSection />}
+        {section === 'notify' && <NotifySection />}
         {section === 'sync' && <SyncSection />}
         {section === 'session' && <SessionSection />}
       </section>
@@ -72,6 +74,36 @@ function ProfileSection() {
         </div>
       </div>
     </form>
+  );
+}
+
+function NotifySection() {
+  const toast = useToast();
+  const [prefs, setPrefs] = useState(getNotifyPrefs);
+  const update = (p: typeof prefs) => { setPrefs(p); setNotifyPrefs(p); };
+  const denied = desktopSupported() && Notification.permission === 'denied';
+
+  return (
+    <>
+      <h2 className="ptitle">Уведомления</h2>
+      <p className="hint">Работают, пока вкладка с мессенджером открыта. Новые сообщения также видны в заголовке вкладки.</p>
+      <label className="check">
+        <input type="checkbox" checked={prefs.sound} onChange={(e) => { update({ ...prefs, sound: e.target.checked }); if (e.target.checked) beep(); }} />
+        <span>Звук при новом сообщении</span>
+      </label>
+      <label className="check">
+        <input type="checkbox" checked={prefs.desktop} disabled={!desktopSupported() || denied}
+          onChange={async (e) => {
+            if (!e.target.checked) { update({ ...prefs, desktop: false }); return; }
+            if (await enableDesktop()) update({ ...prefs, desktop: true });
+            else toast('Браузер не разрешил уведомления');
+          }} />
+        <span>Системные уведомления, когда вкладка в фоне
+          {!desktopSupported() && <small>Браузер не поддерживает уведомления</small>}
+          {denied && <small>Запрещено в настройках браузера для этого сайта</small>}
+        </span>
+      </label>
+    </>
   );
 }
 

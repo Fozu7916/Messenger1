@@ -10,6 +10,7 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
     public DbSet<Dialog> Dialogs => Set<Dialog>();
     public DbSet<DialogMember> DialogMembers => Set<DialogMember>();
     public DbSet<Message> Messages => Set<Message>();
+    public DbSet<MessageHide> MessageHides => Set<MessageHide>();
 
     // ULID — 26 символов Crockford Base32. Лексикографический порядок == хронологический,
     // но только при коллации "C" (побайтовое сравнение), поэтому задаём её явно.
@@ -47,6 +48,7 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
             UlidColumn(e.Property(x => x.UserId));
             e.HasOne(x => x.Dialog).WithMany(d => d.Members).HasForeignKey(x => x.DialogId).OnDelete(DeleteBehavior.Cascade);
             e.HasOne(x => x.User).WithMany().HasForeignKey(x => x.UserId).OnDelete(DeleteBehavior.Cascade);
+            e.Property(x => x.LastReadId).HasMaxLength(26).UseCollation("C");
             e.HasIndex(x => x.UserId);
         });
 
@@ -68,6 +70,18 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
             e.HasIndex(x => new { x.SenderId, x.ClientMessageId }).IsUnique();
             // история диалога и дельта-синхронизация
             e.HasIndex(x => new { x.DialogId, x.Id });
+        });
+
+        b.Entity<MessageHide>(e =>
+        {
+            e.ToTable("message_hides");
+            e.HasKey(x => new { x.MessageId, x.UserId });
+            UlidColumn(e.Property(x => x.MessageId));
+            UlidColumn(e.Property(x => x.UserId));
+            e.Property(x => x.CreatedAt).HasDefaultValueSql("now()");
+            e.HasOne<Message>().WithMany().HasForeignKey(x => x.MessageId).OnDelete(DeleteBehavior.Cascade);
+            e.HasOne<User>().WithMany().HasForeignKey(x => x.UserId).OnDelete(DeleteBehavior.Cascade);
+            e.HasIndex(x => x.UserId);
         });
     }
 }

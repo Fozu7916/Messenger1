@@ -44,22 +44,31 @@ public sealed class UsersController(AppDbContext db) : ControllerBase
         return new UserDto(user.Id, user.Login, user.DisplayName, user.AvatarUrl);
     }
 
-    /// <summary>Поиск по префиксу логина или имени, минимум 2 символа.</summary>
+    /// <summary>
+    /// Список пользователей (кроме себя), как «Люди» во ВКонтакте: без query — все, по алфавиту имени;
+    /// с query — те, у кого логин или имя содержит строку. Постраничная выдача: limit (1–100, по умолчанию 30) и offset.
+    /// </summary>
     [HttpGet]
-    public async Task<ActionResult<List<UserDto>>> Search([FromQuery] string? query, CancellationToken ct)
+    public async Task<ActionResult<List<UserDto>>> List(
+        [FromQuery] string? query,
+        [FromQuery] int limit = 30,
+        [FromQuery] int offset = 0,
+        CancellationToken ct = default)
     {
-        var q = query?.Trim() ?? "";
-        if (q.Length < 2)
-            return Problem(statusCode: StatusCodes.Status400BadRequest, title: "query must be at least 2 characters");
-
         var me = User.GetUserId();
-        var pattern = q.Replace("\\", "\\\\").Replace("%", "\\%").Replace("_", "\\_") + "%";
+        var q = query?.Trim() ?? "";
 
-        return await db.Users.AsNoTracking()
-            .Where(u => u.Id != me &&
-                        (EF.Functions.ILike(u.Login, pattern, "\\") || EF.Functions.ILike(u.DisplayName, pattern, "\\")))
-            .OrderBy(u => u.Login)
-            .Take(20)
+        var users = db.Users.AsNoTracking().Where(u => u.Id != me);
+        if (q.Length > 0)
+        {
+            var pattern = "%" + q.Replace("\\", "\\\\").Replace("%", "\\%").Replace("_", "\\_") + "%";
+            users = users.Where(u => EF.Functions.ILike(u.Login, pattern, "\\") || EF.Functions.ILike(u.DisplayName, pattern, "\\"));
+        }
+
+        return await users
+            .OrderBy(u => u.DisplayName).ThenBy(u => u.Login)
+            .Skip(Math.Max(offset, 0))
+            .Take(Math.Clamp(limit, 1, 100))
             .Select(u => new UserDto(u.Id, u.Login, u.DisplayName, u.AvatarUrl))
             .ToListAsync(ct);
     }

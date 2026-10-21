@@ -22,5 +22,20 @@ public interface IMessageRepository
     /// before — сообщения старее ULID, для подгрузки истории вверх.
     /// Без обоих — последние <paramref name="limit"/>. Результат всегда по возрастанию ULID.
     /// </summary>
-    Task<IReadOnlyList<MessageDto>> GetAsync(string dialogId, string? after, string? before, int limit, CancellationToken ct = default);
+    Task<IReadOnlyList<MessageDto>> GetAsync(string dialogId, string userId, string? after, string? before, int limit, CancellationToken ct = default);
+
+    /// <summary>Сколько непрочитанных сообщений собеседников у пользователя в каждом его диалоге (диалоги без непрочитанных не включаются).</summary>
+    Task<IReadOnlyDictionary<string, int>> GetUnreadCountsAsync(string userId, CancellationToken ct = default);
+
+    /// <summary>
+    /// Отмечает диалог прочитанным до сообщения <paramref name="upToId"/> включительно (на самом деле — до ближайшего существующего).
+    /// Назад отметка не двигается. Возвращает новый ULID отметки, если она сдвинулась, иначе null.
+    /// </summary>
+    Task<string?> MarkReadAsync(string dialogId, string userId, string upToId, CancellationToken ct = default);
+
+    /// <summary>
+    /// Полнотекстовый (подстрочный, без учёта регистра) поиск по сообщениям во всех диалогах пользователя
+    /// или в одном из них. Результат — от новых к старым; <paramref name="before"/> — курсор для следующей страницы.
+    /// </summary>
+    Task<IReadOnlyList<MessageDto>> SearchAsync(string userId, string query, string? dialogId, string? before, int limit, CancellationToken ct = default);
 }
