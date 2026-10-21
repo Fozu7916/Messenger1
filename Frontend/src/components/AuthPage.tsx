@@ -27,11 +27,7 @@ export function AuthPage() {
       <div className="banner">Личная переписка без установки приложений</div>
       <div className="hero">
         <div>
-<<<<<<< Updated upstream
-          <h1>Говорите тише. Слышно лучше.</h1>
-=======
           <h1>Безопасность превыше всего</h1>
->>>>>>> Stashed changes
           <ul>
             {POINTS.map((t) => (
               <li key={t}><b><svg viewBox="0 0 12 12"><path d="M2 6.5l2.6 2.6L10 3.5" /></svg></b>{t}</li>
