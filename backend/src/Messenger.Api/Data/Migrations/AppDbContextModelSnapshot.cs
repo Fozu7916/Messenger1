@@ -58,6 +58,12 @@ namespace Messenger.Api.Data.Migrations
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("joined_at");
 
+                    b.Property<string>("LastReadId")
+                        .HasMaxLength(26)
+                        .HasColumnType("character varying(26)")
+                        .HasColumnName("last_read_id")
+                        .UseCollation("C");
+
                     b.HasKey("DialogId", "UserId")
                         .HasName("pk_dialog_members");
 
@@ -98,6 +104,10 @@ namespace Messenger.Api.Data.Migrations
                         .HasColumnName("dialog_id")
                         .UseCollation("C");
 
+                    b.Property<DateTime?>("EditedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("edited_at");
+
                     b.Property<string>("MediaUrl")
                         .HasMaxLength(2048)
                         .HasColumnType("character varying(2048)")
@@ -127,6 +137,35 @@ namespace Messenger.Api.Data.Migrations
                         .HasDatabaseName("ix_messages_sender_id_client_message_id");
 
                     b.ToTable("messages", (string)null);
+                });
+
+            modelBuilder.Entity("Messenger.Api.Domain.MessageHide", b =>
+                {
+                    b.Property<string>("MessageId")
+                        .HasMaxLength(26)
+                        .HasColumnType("character varying(26)")
+                        .HasColumnName("message_id")
+                        .UseCollation("C");
+
+                    b.Property<string>("UserId")
+                        .HasMaxLength(26)
+                        .HasColumnType("character varying(26)")
+                        .HasColumnName("user_id")
+                        .UseCollation("C");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at")
+                        .HasDefaultValueSql("now()");
+
+                    b.HasKey("MessageId", "UserId")
+                        .HasName("pk_message_hides");
+
+                    b.HasIndex("UserId")
+                        .HasDatabaseName("ix_message_hides_user_id");
+
+                    b.ToTable("message_hides", (string)null);
                 });
 
             modelBuilder.Entity("Messenger.Api.Domain.User", b =>
@@ -224,6 +263,23 @@ namespace Messenger.Api.Data.Migrations
                     b.Navigation("Dialog");
 
                     b.Navigation("Sender");
+                });
+
+            modelBuilder.Entity("Messenger.Api.Domain.MessageHide", b =>
+                {
+                    b.HasOne("Messenger.Api.Domain.Message", null)
+                        .WithMany()
+                        .HasForeignKey("MessageId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired()
+                        .HasConstraintName("fk_message_hides_messages_message_id");
+
+                    b.HasOne("Messenger.Api.Domain.User", null)
+                        .WithMany()
+                        .HasForeignKey("UserId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired()
+                        .HasConstraintName("fk_message_hides_users_user_id");
                 });
 
             modelBuilder.Entity("Messenger.Api.Domain.Dialog", b =>

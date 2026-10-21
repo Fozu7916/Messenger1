@@ -11,6 +11,17 @@ public sealed record MessageDto(
     string SenderId,
     string Text,
     string? MediaUrl,
-    DateTime CreatedAt);
+    DateTime CreatedAt,
+    DateTime? EditedAt = null);
 
-public sealed record DialogDto(string Id, DateTime CreatedAt, UserDto? Peer, MessageDto? LastMessage);
+/// <summary>
+/// UnreadCount — сколько сообщений собеседника это пользователь ещё не прочитал.
+/// PeerLastReadId — ULID последнего сообщения, которое прочитал собеседник (для отметки «прочитано»).
+/// </summary>
+public sealed record DialogDto(
+    string Id,
+    DateTime CreatedAt,
+    UserDto? Peer,
+    MessageDto? LastMessage,
+    int UnreadCount = 0,
+    string? PeerLastReadId = null);
