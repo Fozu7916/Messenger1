@@ -264,7 +264,9 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     db, dbError, error, status, typing, presence, renamed,
     setActive: (id) => {
       activeRef.current = id;
-      if (id) void dbRef.current?.dialogs.findOne(id).exec().then((x) => x && (x.toJSON() as DialogDoc).unread && x.patch({ unread: 0 }));
+      if (id) void dbRef.current?.dialogs.findOne(id).exec().then((x) =>
+        x && (x.toJSON() as DialogDoc).unread ? x.patch({ unread: 0 }) : null
+      );
     },
     send: (dialogId, text) => {
       const m: MessageDoc = {
