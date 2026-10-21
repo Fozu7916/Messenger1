@@ -4,6 +4,7 @@ using Messenger.Api.Data;
 using Messenger.Api.Hubs;
 using Messenger.Api.Messages;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
@@ -64,8 +65,15 @@ builder.Services
     });
 builder.Services.AddAuthorization();
 
+// ---------- Forwarded headers (Render / любой reverse proxy) ----------
+builder.Services.Configure<ForwardedHeadersOptions>(o =>
+{
+    o.ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto;
+    o.KnownNetworks.Clear();   // если warning "obsolete" — замените на KnownIPNetworks.Clear()
+    o.KnownProxies.Clear();
+});
+
 // ---------- Rate limiting на авторизацию ----------
-// TODO: за Nginx RemoteIpAddress — адрес прокси; подключить ForwardedHeaders с KnownProxies.
 var authPerMinute = config.GetValue("RateLimiting:AuthPerMinute", 10);
 builder.Services.AddRateLimiter(o =>
 {
@@ -93,11 +101,12 @@ builder.Services.AddSwaggerGen();
 
 var app = builder.Build();
 
+app.UseForwardedHeaders();   // самым первым
+
 if (config.GetValue<bool>("Database:AutoMigrate"))
 {
     using var scope = app.Services.CreateScope();
     var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-    // Пока миграций нет — создаём схему напрямую. После `dotnet ef migrations add` используется Migrate().
     if (db.Database.GetMigrations().Any()) db.Database.Migrate();
     else db.Database.EnsureCreated();
 }
@@ -109,6 +118,10 @@ if (app.Environment.IsDevelopment())
     app.UseSwagger();
     app.UseSwaggerUI();
 }
+
+app.UseDefaultFiles();   // раздача собранного фронтенда из wwwroot
+app.UseStaticFiles();
+
 app.UseCors();
 app.UseRateLimiter();
 app.UseAuthentication();
@@ -117,6 +130,7 @@ app.UseAuthorization();
 app.MapControllers();
 app.MapHub<ChatHub>(ChatHub.Path);
 app.MapGet("/health", () => Results.Ok(new { status = "ok" }));
+app.MapFallbackToFile("index.html");   // SPA-fallback, строго последним среди Map*
 
 app.Run();
 
