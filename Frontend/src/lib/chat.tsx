@@ -4,6 +4,8 @@ import type { Observable } from 'rxjs';
 import * as api from './api';
 import { useAuth } from './auth';
 import { closeDb, openDb, type DB } from './db';
+import { beep, getNotifyPrefs, showDesktop } from './notify';
+import { useToast } from '../components/ui';
 import type { DialogDoc, DialogDto, MessageDoc, MessageDto, User } from '../types';
 
 export type ConnStatus = 'connecting' | 'online' | 'offline';
@@ -19,7 +21,8 @@ interface Chat {
   setActive(id: string | null): void;
   send(dialogId: string, text: string): void;
   retry(m: MessageDoc): void;
-  remove(m: MessageDoc): Promise<void>;
+  remove(m: MessageDoc, scope: 'me' | 'all'): Promise<void>;
+  edit(m: MessageDoc, text: string): Promise<void>;
   startDialog(user: User): Promise<string>;
   removeDialog(id: string): Promise<void>;
   loadOlder(dialogId: string): Promise<number>;
@@ -41,6 +44,7 @@ const toPeer = (u: User) => ({ id: u.id, login: u.login, displayName: u.displayN
 const toLocal = (m: MessageDto): MessageDoc => ({
   clientMessageId: m.clientMessageId || m.id, id: m.id, dialogId: m.dialogId, senderId: m.senderId,
   text: m.text, createdAt: Date.parse(m.createdAt), status: 'sent', isDeleted: false,
+  editedAt: m.editedAt ? Date.parse(m.editedAt) : 0,
 });
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -62,6 +66,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   const { session } = useAuth();
   const me = session!.user;
   const token = session!.token;
+  const toast = useToast();
 
   const [db, setDb] = useState<DB | null>(null);
   const [dbError, setDbError] = useState('');
@@ -79,6 +84,8 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   const chain = useRef<Promise<unknown>>(Promise.resolve());
   const timers = useRef<Record<string, number>>({});
   const lastTyping = useRef(0);
+  const readMark = useRef(new Map<string, string>()); // dialogId → ULID, до которого уже отправили MarkRead
+  const baseTitle = useRef(document.title);
 
   const connected = () => hubRef.current?.state === HubConnectionState.Connected;
   const report = (e: unknown) => { console.error(e); setError(errText(e)); };
@@ -94,8 +101,8 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       if (!tmp) return null;
       const t = tmp.toJSON() as DialogDoc;
       const dto = await api.createDialog(t.peer.id); // бросит ошибку, пока нет сети
-      await d.dialogs.upsert({ id: dto.id, createdAt: Date.parse(dto.createdAt), peer: toPeer(dto.peer), unread: t.unread, pending: false });
-      for (const m of await d.messages.find({ selector: { dialogId: tempId } }).exec()) await m.patch({ dialogId: dto.id });
+      await d.dialogs.upsert({ id: dto.id, createdAt: Date.parse(dto.createdAt), peer: toPeer(dto.peer), unread: t.unread, peerRead: '', pending: false });
+      for (const m of await d.messages.find({ selector: { dialogId: tempId } }).exec()) await m.incrementalPatch({ dialogId: dto.id });
       await tmp.remove();
       setRenamed((r) => ({ ...r, [tempId]: dto.id }));
       return dto.id;
@@ -122,14 +129,15 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       if (page.length < 100) break;
       last = page[page.length - 1].id;
     }
-    // удаления в дельту не попадают — сверяем локальные сообщения с «хвостом» истории
+    // правки и удаления в дельту не попадают — обновляем «хвост» истории и сверяем с ним локальные сообщения
     const tail = await api.messages(did, { limit: 100 });
+    await upsertMessages(tail);
     const from = tail[0]?.id ?? '';
     const alive = new Set(tail.map((m) => m.id));
     for (const m of local) {
       if (!m.isDeleted && m.id >= from && !alive.has(m.id)) {
         const doc = await d.messages.findOne(m.clientMessageId).exec();
-        await doc?.patch({ isDeleted: true });
+        await doc?.incrementalPatch({ isDeleted: true });
       }
     }
   };
@@ -138,11 +146,13 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     const d = dbRef.current!;
     const list: DialogDto[] = await api.dialogs();
     const local = plain<DialogDoc>(await d.dialogs.find().exec());
-    const unread = new Map(local.map((x) => [x.id, x.unread]));
+    const visible = document.visibilityState === 'visible';
     const ids = new Set(list.map((x) => x.id));
     for (const x of local) if (!x.pending && !ids.has(x.id)) await dropDialogLocal(x.id); // удалён собеседником
     await d.dialogs.bulkUpsert(list.map((x) => ({
-      id: x.id, createdAt: Date.parse(x.createdAt), peer: toPeer(x.peer), unread: unread.get(x.id) ?? 0, pending: false,
+      id: x.id, createdAt: Date.parse(x.createdAt), peer: toPeer(x.peer),
+      unread: activeRef.current === x.id && visible ? 0 : x.unreadCount,
+      peerRead: x.peerLastReadId ?? '', pending: false,
     })));
     for (const x of local) if (x.pending) void materialize(x.id).catch(() => {}); // досоздаём офлайн-диалоги
     const res = await Promise.allSettled(list.map((x) => syncMessages(x.id)));
@@ -165,12 +175,12 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         m = { ...m, dialogId: real };
       }
       const serverUlid: string = await hubRef.current!.invoke('SendMessage', m.clientMessageId, m.dialogId, m.text);
-      await (await d.messages.findOne(cid).exec())?.patch({ id: serverUlid, status: 'sent' });
+      await (await d.messages.findOne(cid).exec())?.incrementalPatch({ id: serverUlid, status: 'sent' });
     } catch (e) {
       // ошибки валидации/доступа — повтор бессмысленен; сетевые — оставляем pending до появления сети
       const fatal = /forbidden|invalid_text|invalid_client_message_id/.test(String(e))
         || (e instanceof api.ApiError && (e.status === 400 || e.status === 404));
-      if (fatal) await (await d.messages.findOne(cid).exec())?.patch({ status: 'failed' });
+      if (fatal) await (await d.messages.findOne(cid).exec())?.incrementalPatch({ status: 'failed' });
       else console.warn('push postponed', e);
     } finally { inflight.current.delete(cid); }
   };
@@ -184,8 +194,46 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   const runSync = async () => {
     try { await syncDialogs(); setError(''); } catch (e) { report(e); }
     try { await flushPending(); } catch (e) { report(e); }
+    void refreshPresence();
+    const a = activeRef.current;
+    if (a && document.visibilityState === 'visible') void markRead(a);
   };
   const sync = () => { chain.current = chain.current.then(runSync); return chain.current as Promise<void>; };
+
+  // ---------- Онлайн, «прочитано», уведомления ----------
+  const refreshPresence = async () => {
+    if (!connected()) return;
+    try {
+      const ids: string[] = await hubRef.current!.invoke('GetOnlineContacts');
+      setPresence(Object.fromEntries(ids.map((id) => [id, true])));
+    } catch (e) { console.warn('presence refresh failed', e); }
+  };
+
+  const clearUnread = async (dialogId: string) => {
+    const doc = await dbRef.current?.dialogs.findOne(dialogId).exec();
+    if (doc && (doc.toJSON() as DialogDoc).unread) await doc.incrementalPatch({ unread: 0 });
+  };
+
+  /** Сообщаем серверу, что диалог прочитан до последнего входящего сообщения. */
+  const markRead = async (dialogId: string) => {
+    const d = dbRef.current;
+    if (!d || isTemp(dialogId) || !connected()) return;
+    const top = plain<MessageDoc>(await d.messages.find({ selector: { dialogId, status: 'sent' } }).exec())
+      .filter((m) => m.id && m.senderId !== me.id && !m.isDeleted)
+      .map((m) => m.id).sort().pop();
+    if (!top || readMark.current.get(dialogId) === top) return;
+    readMark.current.set(dialogId, top);
+    try { await hubRef.current!.invoke('MarkRead', dialogId, top); }
+    catch (e) { readMark.current.delete(dialogId); console.warn('markRead failed', e); }
+  };
+
+  const notifyIncoming = (peerName: string, text: string, dialogId: string) => {
+    const prefs = getNotifyPrefs();
+    const snippet = text.length > 80 ? text.slice(0, 80) + '…' : text;
+    if (document.visibilityState === 'visible') toast(`${peerName}: ${snippet}`);
+    else if (prefs.desktop) showDesktop(peerName, snippet, dialogId);
+    if (prefs.sound) beep();
+  };
 
   // ---------- События хаба ----------
   const onReceived = async (m: MessageDto) => {
@@ -193,7 +241,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     const existing = await d.messages.findOne(m.clientMessageId).exec();
     if (m.senderId === me.id && existing) { // эхо собственного сообщения
       const e = existing.toJSON() as MessageDoc;
-      if (e.status !== 'sent' || e.id !== m.id) await existing.patch({ id: m.id, status: 'sent' });
+      if (e.status !== 'sent' || e.id !== m.id) await existing.incrementalPatch({ id: m.id, status: 'sent' });
       return;
     }
     await d.messages.upsert(toLocal(m));
@@ -201,7 +249,11 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     setTyping((t) => { const n = { ...t }; delete n[m.dialogId]; return n; });
     const dlg = await d.dialogs.findOne(m.dialogId).exec();
     if (!dlg) { await sync(); return; }
-    if (activeRef.current !== m.dialogId) await dlg.patch({ unread: (dlg.toJSON() as DialogDoc).unread + 1 });
+    const watching = activeRef.current === m.dialogId && document.visibilityState === 'visible';
+    if (watching) { void markRead(m.dialogId); return; }
+    const info = dlg.toJSON() as DialogDoc;
+    await dlg.incrementalModify((x) => ({ ...x, unread: x.unread + 1 }));
+    notifyIncoming(info.peer.displayName, m.text, m.dialogId);
   };
 
   const onTyping = (did: string, uid: string) => {
@@ -217,6 +269,11 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     let hub: HubConnection | undefined;
     const onNet = () => { if (dbRef.current) void sync(); };
     window.addEventListener('online', onNet);
+    const onVisible = () => {
+      const id = activeRef.current;
+      if (document.visibilityState === 'visible' && id && dbRef.current) { void clearUnread(id); void markRead(id); }
+    };
+    document.addEventListener('visibilitychange', onVisible);
 
     (async () => {
       let d: DB;
@@ -233,60 +290,94 @@ export function ChatProvider({ children }: { children: ReactNode }) {
 
       hub.on('MessageReceived', (m: MessageDto) => void onReceived(m).catch(report));
       hub.on('MessageAcked', async (cid: string, ulid: string) => {
-        await (await d.messages.findOne(cid).exec())?.patch({ id: ulid, status: 'sent' });
+        await (await d.messages.findOne(cid).exec())?.incrementalPatch({ id: ulid, status: 'sent' });
       });
-      hub.on('MessageDeleted', async (_did: string, messageId: string) => {
-        await (await d.messages.findOne({ selector: { id: messageId } }).exec())?.patch({ isDeleted: true });
+      hub.on('MessageDeleted', async (did: string, messageId: string) => {
+        const doc = await d.messages.findOne({ selector: { id: messageId } }).exec();
+        if (!doc) return;
+        const incoming = (doc.toJSON() as MessageDoc).senderId !== me.id;
+        await doc.incrementalPatch({ isDeleted: true });
+        // удалили непрочитанное входящее — пересчитываем счётчик непрочитанных с сервера
+        if (incoming && ((await d.dialogs.findOne(did).exec())?.toJSON() as DialogDoc | undefined)?.unread) void syncDialogs().catch(report);
+      });
+      hub.on('MessageEdited', async (m: MessageDto) => {
+        await (await d.messages.findOne({ selector: { id: m.id } }).exec())
+          ?.incrementalPatch({ text: m.text, editedAt: m.editedAt ? Date.parse(m.editedAt) : Date.now() });
+      });
+      hub.on('MessagesRead', async (did: string, uid: string, upTo: string) => {
+        const doc = await d.dialogs.findOne(did).exec();
+        if (!doc) return;
+        const info = doc.toJSON() as DialogDoc;
+        if (uid === me.id) { if (info.unread) await doc.incrementalPatch({ unread: 0 }); } // прочитано на другом устройстве
+        else if (info.peerRead < upTo) await doc.incrementalPatch({ peerRead: upTo });
       });
       hub.on('UserTyping', onTyping);
       hub.on('PresenceChanged', (uid: string, st: string) => setPresence((p) => ({ ...p, [uid]: st === 'online' })));
-      hub.onreconnecting(() => setStatus('connecting'));
+      hub.onreconnecting(() => { setStatus('connecting'); setPresence({}); });
       hub.onreconnected(() => { setStatus('online'); void sync(); });
 
       const connect = async () => {
         while (!dead && hub!.state === HubConnectionState.Disconnected) {
-          try { setStatus('connecting'); await hub!.start(); setStatus('online'); void sync(); return; }
+          try { setStatus('connecting'); await hub!.start(); setStatus('online'); void sync(); void refreshPresence(); return; }
           catch (e) { console.warn('hub start failed', e); setStatus('offline'); await sleep(3000); }
         }
       };
-      hub.onclose(() => { setStatus('offline'); void connect(); });
+      hub.onclose(() => { setStatus('offline'); setPresence({}); void connect(); });
       await connect();
     })();
 
     return () => {
-      dead = true; window.removeEventListener('online', onNet);
+      dead = true; window.removeEventListener('online', onNet); document.removeEventListener('visibilitychange', onVisible);
       hub?.stop(); dbRef.current = null; hubRef.current = null; setDb(null); void closeDb();
     };
   }, [me.id]);
+
+  // Счётчик непрочитанных в заголовке вкладки
+  useEffect(() => {
+    if (!db) return;
+    const base = baseTitle.current;
+    const sub = db.dialogs.find().$.subscribe((docs) => {
+      const n = docs.reduce((s, x) => s + (x.toJSON() as DialogDoc).unread, 0);
+      document.title = n ? `(${n}) ${base}` : base;
+    });
+    return () => { sub.unsubscribe(); document.title = base; };
+  }, [db]);
 
   // ---------- Действия интерфейса ----------
   const value: Chat = {
     db, dbError, error, status, typing, presence, renamed,
     setActive: (id) => {
       activeRef.current = id;
-      if (id) void dbRef.current?.dialogs.findOne(id).exec().then((x) =>
-        x && (x.toJSON() as DialogDoc).unread ? x.patch({ unread: 0 }) : null
-      );
+      if (id) { void clearUnread(id); void markRead(id); }
     },
     send: (dialogId, text) => {
       const m: MessageDoc = {
         clientMessageId: newId(), id: '', dialogId, senderId: me.id, text,
-        createdAt: Date.now(), status: 'pending', isDeleted: false,
+        createdAt: Date.now(), status: 'pending', isDeleted: false, editedAt: 0,
       };
       // Optimistic UI: сообщение сразу попадает в локальную БД и на экран, сеть — потом
       dbRef.current!.messages.insert(m).then(() => push(m.clientMessageId)).catch(report);
     },
     retry: (m) => {
       void dbRef.current!.messages.findOne(m.clientMessageId).exec()
-        .then((doc) => doc?.patch({ status: 'pending' })).then(() => push(m.clientMessageId)).catch(report);
+        .then((doc) => doc?.incrementalPatch({ status: 'pending' })).then(() => push(m.clientMessageId)).catch(report);
     },
-    remove: async (m) => {
+    remove: async (m, scope) => {
       const doc = await dbRef.current!.messages.findOne(m.clientMessageId).exec();
       if (!doc) return;
       if (!m.id) { await doc.remove(); return; } // ещё не ушло на сервер
-      await doc.patch({ isDeleted: true });
-      try { await api.deleteMessage(m.id); }
-      catch (e) { await doc.getLatest().patch({ isDeleted: false }); throw e; }
+      await doc.incrementalPatch({ isDeleted: true });
+      try { await api.deleteMessage(m.id, scope); }
+      catch (e) { await doc.getLatest().incrementalPatch({ isDeleted: false }); throw e; }
+    },
+    edit: async (m, text) => {
+      const t = text.trim();
+      if (!t || t === m.text) return;
+      const doc = await dbRef.current!.messages.findOne(m.clientMessageId).exec();
+      if (!doc) return;
+      if (!m.id) { await doc.incrementalPatch({ text: t }); return; } // ещё не ушло на сервер — правим локально
+      const dto = await api.editMessage(m.id, t);
+      await doc.getLatest().incrementalPatch({ text: dto.text, editedAt: dto.editedAt ? Date.parse(dto.editedAt) : Date.now() });
     },
     startDialog: async (user) => {
       const d = dbRef.current!;
@@ -294,7 +385,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       if (have) return have.id;
       // Диалог появляется в локальной БД мгновенно, на сервере создаётся, как только появится сеть
       const tempId = 'L' + user.id;
-      await d.dialogs.upsert({ id: tempId, createdAt: Date.now(), peer: toPeer(user), unread: 0, pending: true });
+      await d.dialogs.upsert({ id: tempId, createdAt: Date.now(), peer: toPeer(user), unread: 0, peerRead: '', pending: true });
       void materialize(tempId).catch((e) => console.warn('dialog will be created later', e));
       return tempId;
     },

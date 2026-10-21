@@ -9,7 +9,8 @@ namespace Messenger.Tests;
 /// <summary>Поднимает настоящий PostgreSQL в Docker и приложение поверх него. Требуется запущенный Docker.</summary>
 public sealed class ApiFactory : WebApplicationFactory<Program>, IAsyncLifetime
 {
-    private readonly PostgreSqlContainer _pg = new PostgreSqlBuilder().WithImage("postgres:17").Build();
+    private readonly PostgreSqlContainer _pg = new PostgreSqlBuilder("postgres:17").Build();
+    
 
     public Task InitializeAsync() => _pg.StartAsync();
 

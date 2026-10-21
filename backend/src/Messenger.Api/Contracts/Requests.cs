@@ -42,3 +42,9 @@ public sealed class CreateDialogRequest
     [Required, StringLength(26, MinimumLength = 26)]
     public string UserId { get; init; } = "";
 }
+
+public sealed class EditMessageRequest
+{
+    [Required, MaxLength(4000)]
+    public string Text { get; init; } = "";
+}

@@ -4,7 +4,7 @@ import type { MessageDoc } from '../types';
 
 const m = (id: string, createdAt: number): MessageDoc => ({
   clientMessageId: id || String(createdAt), id, dialogId: 'd', senderId: 'u', text: '',
-  createdAt, status: id ? 'sent' : 'pending', isDeleted: false,
+  createdAt, status: id ? 'sent' : 'pending', isDeleted: false, editedAt: 0,
 });
 
 describe('format', () => {

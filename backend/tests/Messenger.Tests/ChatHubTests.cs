@@ -122,21 +122,22 @@ public sealed class ChatHubTests(ApiFactory factory)
     }
 
     [Fact]
-    public async Task Only_sender_can_delete_message_and_it_disappears_from_history()
+    public async Task Stranger_cannot_delete_message_but_any_member_can_delete_it_for_everyone()
     {
         var alice = await factory.RegisterAsync("alice");
         var bob = await factory.RegisterAsync("bob");
+        var carol = await factory.RegisterAsync("carol");
         var dialog = await alice.CreateDialogAsync(bob);
         await using var hub = factory.ConnectHub(alice.Token);
         await hub.StartAsync();
         var id = await hub.InvokeAsync<string>("SendMessage", Guid.NewGuid().ToString(), dialog.Id, "secret");
 
-        var byBob = await bob.Http.DeleteAsync($"/api/messages/{id}");
-        var byAlice = await alice.Http.DeleteAsync($"/api/messages/{id}");
+        var byCarol = await carol.Http.DeleteAsync($"/api/messages/{id}");
+        var byBob = await bob.Http.DeleteAsync($"/api/messages/{id}");   // чужое сообщение, удаляем у всех
 
-        Assert.Equal(HttpStatusCode.NotFound, byBob.StatusCode);
-        Assert.Equal(HttpStatusCode.NoContent, byAlice.StatusCode);
-        var history = await bob.Http.GetFromJsonAsync<List<MessageDto>>($"/api/dialogs/{dialog.Id}/messages");
+        Assert.Equal(HttpStatusCode.NotFound, byCarol.StatusCode);
+        Assert.Equal(HttpStatusCode.NoContent, byBob.StatusCode);
+        var history = await alice.Http.GetFromJsonAsync<List<MessageDto>>($"/api/dialogs/{dialog.Id}/messages");
         Assert.Empty(history!);
     }
 }

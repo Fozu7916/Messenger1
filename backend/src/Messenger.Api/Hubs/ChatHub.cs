@@ -5,8 +5,8 @@ using Microsoft.AspNetCore.SignalR;
 namespace Messenger.Api.Hubs;
 
 /// <summary>
-/// Клиент → сервер: SendMessage, Typing.
-/// Сервер → клиент: MessageReceived, MessageAcked, MessageDeleted, UserTyping, PresenceChanged.
+/// Клиент → сервер: SendMessage, Typing, MarkRead, GetOnlineContacts.
+/// Сервер → клиент: MessageReceived, MessageAcked, MessageDeleted, MessageEdited, MessagesRead, UserTyping, PresenceChanged.
 /// Рассылка идёт через Clients.Users(...) — работает между инстансами благодаря Redis backplane.
 /// </summary>
 [Authorize]
@@ -73,6 +73,30 @@ public sealed class ChatHub(IMessageRepository messages, IDialogAccess dialogs, 
 
         var others = members.Where(id => id != UserId).ToList();
         await Clients.Users(others).SendAsync("UserTyping", dialogId, UserId);
+    }
+
+    /// <summary>
+    /// Отмечает диалог прочитанным до сообщения upToId. Участникам (включая другие устройства читающего)
+    /// уходит MessagesRead(dialogId, readerId, upToId) — собеседник видит «прочитано».
+    /// </summary>
+    public async Task MarkRead(string dialogId, string upToId)
+    {
+        var members = await dialogs.GetMemberIdsAsync(dialogId ?? "");
+        if (!members.Contains(UserId))
+            throw new HubException("forbidden");
+        if (string.IsNullOrWhiteSpace(upToId) || !Ulid.TryParse(upToId, out _))
+            throw new HubException("invalid_message_id");
+
+        var readUpTo = await messages.MarkReadAsync(dialogId!, UserId, upToId);
+        if (readUpTo is not null)
+            await Clients.Users(members).SendAsync("MessagesRead", dialogId, UserId, readUpTo);
+    }
+
+    /// <summary>Кто из собеседников сейчас онлайн. Клиент вызывает при (пере)подключении, чтобы не ждать событий PresenceChanged.</summary>
+    public async Task<IReadOnlyList<string>> GetOnlineContacts()
+    {
+        var contacts = await dialogs.GetContactIdsAsync(UserId);
+        return contacts.Where(presence.IsOnline).ToList();
     }
 
     private async Task NotifyPresenceAsync(string userId, string status)

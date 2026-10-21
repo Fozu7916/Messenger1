@@ -47,11 +47,28 @@ export const register = (v: { login: string; email: string; password: string; di
 export const login = (login: string, password: string) => req<AuthResponse>('POST', '/api/auth/login', { login, password });
 export const logout = () => req<void>('POST', '/api/auth/logout');
 export const updateMe = (v: { displayName: string; avatarUrl: string | null }) => req<User>('PUT', '/api/users/me', v);
-export const searchUsers = (q: string) => req<User[]>('GET', `/api/users?query=${encodeURIComponent(q)}`);
+// Люди: без query — все пользователи по алфавиту (постранично), с query — поиск по логину и имени.
+export const users = (p: { query?: string; offset?: number; limit?: number } = {}) => {
+  const q = new URLSearchParams();
+  if (p.query) q.set('query', p.query);
+  if (p.offset) q.set('offset', String(p.offset));
+  if (p.limit) q.set('limit', String(p.limit));
+  return req<User[]>('GET', `/api/users?${q}`);
+};
 export const dialogs = () => req<DialogDto[]>('GET', '/api/dialogs');
 export const createDialog = (userId: string) => req<DialogDto>('POST', '/api/dialogs', { userId });
 export const deleteDialog = (id: string) => req<void>('DELETE', `/api/dialogs/${id}`);
-export const deleteMessage = (id: string) => req<void>('DELETE', `/api/messages/${id}`);
+// scope: 'me' — скрыть только у себя, 'all' — удалить у обоих участников (как в Telegram)
+export const deleteMessage = (id: string, scope: 'me' | 'all' = 'all') => req<void>('DELETE', `/api/messages/${id}?scope=${scope}`);
+export const editMessage = (id: string, text: string) => req<MessageDto>('PUT', `/api/messages/${id}`, { text });
+// Поиск по тексту во всех своих диалогах, от новых к старым.
+export const searchMessages = (q: string, p: { dialogId?: string; before?: string; limit?: number } = {}) => {
+  const s = new URLSearchParams({ q });
+  if (p.dialogId) s.set('dialogId', p.dialogId);
+  if (p.before) s.set('before', p.before);
+  if (p.limit) s.set('limit', String(p.limit));
+  return req<MessageDto[]>('GET', `/api/messages/search?${s}`);
+};
 export const messages = (dialogId: string, p: { after?: string; before?: string; limit?: number }) => {
   const q = new URLSearchParams();
   if (p.after) q.set('after', p.after);
