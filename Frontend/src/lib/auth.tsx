@@ -7,7 +7,7 @@ interface Session { token: string; expiresAt: string; user: User }
 interface Auth {
   session: Session | null;
   login(login: string, password: string): Promise<void>;
-  register(v: { login: string; email: string; password: string; displayName: string }): Promise<void>;
+  register(v: { login: string; email: string; password: string; displayName?: string }): Promise<void>;
   logout(): void;
   updateProfile(v: { displayName: string; avatarUrl: string | null }): Promise<void>;
 }

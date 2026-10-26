@@ -9,8 +9,24 @@ export const fmtTime = (ts: number) =>
 export const fmtDay = (ts: number) =>
   new Date(ts).toLocaleDateString('ru', { day: 'numeric', month: 'long' });
 
+// Только публичный https без логина/пароля и без локальных адресов (сервер проверяет то же самое).
 export const isHttpUrl = (s: string) => {
-  try { const u = new URL(s); return u.protocol === 'http:' || u.protocol === 'https:'; } catch { return false; }
+  try {
+    const u = new URL(s);
+    const h = u.hostname.toLowerCase().replace(/\.$/, '');
+    if (u.protocol !== 'https:' || u.username || u.password || u.port || s.length > 2048) return false;
+    if (h === 'localhost' || /\.(localhost|local|internal|lan|home)$/.test(h)) return false;
+    if (/^\[|^\d+\.\d+\.\d+\.\d+$/.test(h) && /^(\[|0\.|10\.|127\.|169\.254\.|172\.(1[6-9]|2\d|3[01])\.|192\.168\.)/.test(h)) return false;
+    return h.includes('.') || h.startsWith('[');
+  } catch { return false; }
+};
+
+export const fmtLastSeen = (ts: number, now = Date.now()) => {
+  const diff = now - ts, d = new Date(ts), t = fmtTime(ts), today = new Date(now).setHours(0, 0, 0, 0);
+  if (diff < 60_000) return 'был(а) в сети только что';
+  if (ts >= today) return `был(а) в сети сегодня в ${t}`;
+  if (ts >= today - 86_400_000) return `был(а) в сети вчера в ${t}`;
+  return `был(а) в сети ${d.toLocaleDateString('ru', { day: 'numeric', month: 'long' })} в ${t}`;
 };
 
 // Подтверждённые — по ULID (он совпадает с хронологией), неподтверждённые — в конец по времени.

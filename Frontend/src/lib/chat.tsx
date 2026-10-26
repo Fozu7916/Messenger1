@@ -17,6 +17,7 @@ interface Chat {
   status: ConnStatus;                   // состояние SignalR
   typing: Record<string, boolean>;      // dialogId → собеседник печатает
   presence: Record<string, boolean>;    // userId → онлайн
+  lastSeen: Record<string, number>;     // userId → время последнего выхода (мс)
   renamed: Record<string, string>;      // временный id диалога → серверный id
   setActive(id: string | null): void;
   send(dialogId: string, text: string): void;
@@ -74,6 +75,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   const [status, setStatus] = useState<ConnStatus>('connecting');
   const [typing, setTyping] = useState<Record<string, boolean>>({});
   const [presence, setPresence] = useState<Record<string, boolean>>({});
+  const [lastSeen, setLastSeen] = useState<Record<string, number>>({});
   const [renamed, setRenamed] = useState<Record<string, string>>({});
 
   const dbRef = useRef<DB | null>(null);
@@ -206,6 +208,8 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     try {
       const ids: string[] = await hubRef.current!.invoke('GetOnlineContacts');
       setPresence(Object.fromEntries(ids.map((id) => [id, true])));
+      const seen: Record<string, string> = await hubRef.current!.invoke('GetLastSeen');
+      setLastSeen((p) => ({ ...p, ...Object.fromEntries(Object.entries(seen).map(([id, t]) => [id, Date.parse(t)])) }));
     } catch (e) { console.warn('presence refresh failed', e); }
   };
 
@@ -312,7 +316,10 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         else if (info.peerRead < upTo) await doc.incrementalPatch({ peerRead: upTo });
       });
       hub.on('UserTyping', onTyping);
-      hub.on('PresenceChanged', (uid: string, st: string) => setPresence((p) => ({ ...p, [uid]: st === 'online' })));
+      hub.on('PresenceChanged', (uid: string, st: string, at?: string | null) => {
+        setPresence((p) => ({ ...p, [uid]: st === 'online' }));
+        if (st !== 'online' && at) setLastSeen((p) => ({ ...p, [uid]: Date.parse(at) }));
+      });
       hub.onreconnecting(() => { setStatus('connecting'); setPresence({}); });
       hub.onreconnected(() => { setStatus('online'); void sync(); });
 
@@ -345,7 +352,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
 
   // ---------- Действия интерфейса ----------
   const value: Chat = {
-    db, dbError, error, status, typing, presence, renamed,
+    db, dbError, error, status, typing, presence, lastSeen, renamed,
     setActive: (id) => {
       activeRef.current = id;
       if (id) { void clearUnread(id); void markRead(id); }

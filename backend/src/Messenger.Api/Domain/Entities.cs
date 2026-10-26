@@ -9,6 +9,8 @@ public class User
     public string DisplayName { get; set; } = "";
     public string? AvatarUrl { get; set; }
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+    /// <summary>Когда пользователь последний раз отключился (null — ещё не был в сети после обновления).</summary>
+    public DateTime? LastSeenAt { get; set; }
 }
 
 public class Dialog

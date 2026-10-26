@@ -3,7 +3,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode }
 import * as api from '../lib/api';
 import { useAuth } from '../lib/auth';
 import { useChat, useLiveQuery } from '../lib/chat';
-import { fmtDay, fmtTime, sortMessages } from '../lib/format';
+import { fmtDay, fmtLastSeen, fmtTime, sortMessages } from '../lib/format';
 import { readScroll, saveScroll, usePersisted } from '../lib/persist';
 import type { DialogDoc, MessageDoc, User } from '../types';
 import { Avatar, useToast } from './ui';
@@ -211,7 +211,7 @@ export function ChatsPage() {
 
 function ChatView({ dialog, focusId, onClose }: { dialog: DialogDoc; focusId: string | null; onClose: () => void }) {
   const { session } = useAuth();
-  const { status, typing, presence, send, retry, remove, edit, removeDialog, loadOlder, notifyTyping, setActive } = useChat();
+  const { status, typing, presence, lastSeen, send, retry, remove, edit, removeDialog, loadOlder, notifyTyping, setActive } = useChat();
   const toast = useToast();
   const me = session!.user.id;
   const raw = useLiveQuery<MessageDoc>((d) => d.messages.find({ selector: { dialogId: dialog.id } }), [dialog.id]);
@@ -325,7 +325,7 @@ function ChatView({ dialog, focusId, onClose }: { dialog: DialogDoc; focusId: st
         <Avatar name={dialog.peer.displayName} url={dialog.peer.avatarUrl} online={peerOnline} />
         <div className="t">
           <div className="n">{dialog.peer.displayName}</div>
-          <div className={'s ' + (status !== 'online' ? '' : isTyping ? 'typing' : peerOnline ? 'on' : '')}>{status !== 'online' ? 'нет соединения' : isTyping ? 'печатает…' : peerOnline ? 'в сети' : 'не в сети'}</div>
+          <div className={'s ' + (status !== 'online' ? '' : isTyping ? 'typing' : peerOnline ? 'on' : '')}>{status !== 'online' ? 'нет соединения' : isTyping ? 'печатает…' : peerOnline ? 'в сети' : lastSeen[dialog.peer.id] ? fmtLastSeen(lastSeen[dialog.peer.id]) : 'не в сети'}</div>
         </div>
         <button className="ghost" onClick={() => setDelDialog(true)}>Удалить диалог</button>
       </div>

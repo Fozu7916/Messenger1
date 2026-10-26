@@ -1,26 +1,55 @@
-import { useState, type FormEvent } from 'react';
+import { useState, type FormEvent, type ReactNode } from 'react';
 import { useAuth } from '../lib/auth';
 
 const POINTS = ['Сообщения приходят мгновенно', 'Работает и без сети — отправится позже', 'История всегда под рукой', 'Доступ к диалогу — только у двоих'];
+const EMAIL_RE = /^[^@\s]+@[^@\s.]+(\.[^@\s.]+)*\.[A-Za-z]{2,}$/;
+const PASS_HINT = 'От 8 до 72 символов';
+
+const checkEmail = (v: string) => !v.trim() ? 'Введите email' : EMAIL_RE.test(v.trim()) ? '' : 'Введите корректный email, например name@example.com';
+const LOGIN_RE = /^[a-zA-Z0-9_]{3,32}$/;
+const checkLogin = (v: string) => LOGIN_RE.test(v.trim()) ? '' : '3–32 символа: латиница, цифры, _';
+const checkPass = (v: string) => !v ? 'Введите пароль' : v.length < 8 ? `Пароль слишком короткий: ${v.length} из 8 символов` : '';
 
 export function AuthPage() {
   const { login, register } = useAuth();
   const [mode, setMode] = useState<'login' | 'register'>('login');
   const [err, setErr] = useState('');
   const [busy, setBusy] = useState(false);
+  const [v, setV] = useState({ id: '', login: '', email: '', name: '', password: '' });
+  const [touched, setTouched] = useState<Record<string, boolean>>({});
   const reg = mode === 'register';
 
+  const errors = {
+    login: reg ? checkLogin(v.login) : '',
+    email: reg ? checkEmail(v.email) : '',
+    password: reg ? checkPass(v.password) : '',
+    id: !reg && !v.id.trim() ? 'Введите логин или email' : '',
+  };
+  const hasErrors = reg ? !!(errors.login || errors.email || errors.password) : !!(errors.id || !v.password);
+  const show = (k: keyof typeof errors) => (touched[k] ? errors[k] : '');
+  const set = (k: keyof typeof v) => (e: { target: { value: string } }) => { setV({ ...v, [k]: e.target.value }); setErr(''); };
+  const blur = (k: string) => () => setTouched((t) => ({ ...t, [k]: true }));
+  const switchMode = (m: 'login' | 'register') => { setMode(m); setErr(''); setTouched({}); };
+
+  // Валидация идёт на клиенте до отправки (noValidate + preventDefault) — менеджер паролей не видит невалидные данные.
   const submit = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
-    const f = new FormData(e.currentTarget);
-    const g = (k: string) => String(f.get(k) ?? '');
+    setTouched({ login: true, email: true, password: true, id: true });
+    if (hasErrors) return;
     setBusy(true); setErr('');
     try {
-      if (reg) await register({ login: g('login'), email: g('email'), password: g('password'), displayName: g('displayName') });
-      else await login(g('login'), g('password'));
+      if (reg) await register({ login: v.login, email: v.email, password: v.password, displayName: v.name.trim() || undefined });
+      else await login(v.id, v.password);
     } catch (x) { setErr((x as Error).message); }
     finally { setBusy(false); }
   };
+
+  const field = (k: keyof typeof errors, input: ReactNode, hint?: string) => (
+    <div className="fld">
+      {input}
+      {show(k) ? <div className="err" id={`${k}-e`} role="alert">{show(k)}</div> : hint ? <p className="hint">{hint}</p> : null}
+    </div>
+  );
 
   return (
     <div className="auth">
@@ -39,19 +68,26 @@ export function AuthPage() {
             <div className="msg in">Сёдня не, у мя идз просрочено</div>
           </div>
         </div>
-        <form className="card" onSubmit={submit} key={mode}>
+        <form className="card" onSubmit={submit} noValidate key={mode}>
           <div className="tabs" role="tablist">
-            <button type="button" role="tab" className="ghost" aria-selected={!reg} onClick={() => { setMode('login'); setErr(''); }}>Вход</button>
-            <button type="button" role="tab" className="ghost" aria-selected={reg} onClick={() => { setMode('register'); setErr(''); }}>Регистрация</button>
+            <button type="button" role="tab" className="ghost" aria-selected={!reg} onClick={() => switchMode('login')}>Вход</button>
+            <button type="button" role="tab" className="ghost" aria-selected={reg} onClick={() => switchMode('register')}>Регистрация</button>
           </div>
           <h2>{reg ? 'Создайте аккаунт' : 'С возвращением'}</h2>
           <p className="sub">{reg ? 'Займёт меньше минуты.' : 'Войдите по логину или email.'}</p>
           <div className="form">
-            <input className="field" name="login" placeholder={reg ? 'Логин' : 'Логин или email'} autoComplete="username" required />
-            {reg && <input className="field" name="email" type="email" placeholder="Email" autoComplete="email" required />}
-            {reg && <input className="field" name="displayName" placeholder="Имя в профиле" autoComplete="nickname" />}
-            <input className="field" name="password" type="password" maxLength={72} placeholder="Пароль" autoComplete={reg ? 'new-password' : 'current-password'} required />
-            <div className="err" role="alert">{err}</div>
+            {reg && field('login',
+              <input className="field" name="login" placeholder="Логин" autoComplete="username" maxLength={32} value={v.login} onChange={set('login')} onBlur={blur('login')} aria-invalid={!!show('login')} />,
+              '3–32 символа: латиница, цифры, _')}
+            {reg ? field('email',
+              <input className="field" name="email" type="email" inputMode="email" placeholder="Email" autoComplete="email" value={v.email} onChange={set('email')} onBlur={blur('email')} aria-invalid={!!show('email')} aria-describedby="email-e" />)
+              : field('id',
+              <input className="field" name="login" placeholder="Логин или email" autoComplete="username" value={v.id} onChange={set('id')} onBlur={blur('id')} aria-invalid={!!show('id')} />)}
+            {field('password',
+              <input className="field" name="password" type="password" maxLength={72} placeholder="Пароль" autoComplete={reg ? 'new-password' : 'current-password'} value={v.password} onChange={set('password')} onBlur={blur('password')} aria-invalid={!!show('password')} />,
+              reg ? PASS_HINT : undefined)}
+            {reg && <input className="field" name="displayName" placeholder="Имя (необязательно)" autoComplete="nickname" maxLength={64} value={v.name} onChange={set('name')} />}
+            {err && <div className="err" role="alert">{err}</div>}
             <button className="btn big" disabled={busy}>{busy ? 'Подождите…' : reg ? 'Зарегистрироваться' : 'Войти'}</button>
           </div>
         </form>

@@ -19,12 +19,14 @@ public sealed class AuthController(AppDbContext db, ITokenService tokens) : Cont
     [HttpPost("register"), AllowAnonymous, EnableRateLimiting("auth")]
     public async Task<ActionResult<AuthResponse>> Register(RegisterRequest req, CancellationToken ct)
     {
+        var email = req.Email.Trim().ToLowerInvariant();
+        var baseLogin = req.Login.Trim().ToLowerInvariant();
         var user = new UserEntity
         {
-            Login = req.Login.Trim().ToLowerInvariant(),
-            Email = req.Email.Trim().ToLowerInvariant(),
+            Login = baseLogin,
+            Email = email,
             PasswordHash = BCrypt.Net.BCrypt.HashPassword(req.Password, workFactor: 11),
-            DisplayName = req.DisplayName.Trim(),
+            DisplayName = string.IsNullOrWhiteSpace(req.DisplayName) ? baseLogin : req.DisplayName.Trim(),
         };
 
         db.Users.Add(user);

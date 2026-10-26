@@ -20,7 +20,7 @@ export function Avatar({ name, url, online, size = 40 }: { name: string; url?: s
       width: size, height: size, fontSize: size * 0.35,
       ...(url && !bad ? {} : { background: `linear-gradient(135deg, ${colorOf(name)[0]}, ${colorOf(name)[1]})`, color: '#fff' }),
     }}>
-      {url && !bad ? <img src={url} alt="" referrerPolicy="no-referrer" onError={() => setBad(true)} /> : initials(name)}
+      {url && !bad ? <img src={url} alt="" referrerPolicy="no-referrer" loading="lazy" decoding="async" onError={() => setBad(true)} /> : initials(name)}
       {online !== undefined && <i className={online ? 'on' : ''} />}
     </div>
   );

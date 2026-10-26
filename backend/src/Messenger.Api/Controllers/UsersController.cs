@@ -25,20 +25,15 @@ public sealed class UsersController(AppDbContext db) : ControllerBase
     [HttpPut("me")]
     public async Task<ActionResult<UserDto>> UpdateMe(UpdateProfileRequest req, CancellationToken ct)
     {
-        // запрещаем javascript:/data: и т.п. в аватаре
-        if (!string.IsNullOrWhiteSpace(req.AvatarUrl) &&
-            !(Uri.TryCreate(req.AvatarUrl, UriKind.Absolute, out var uri) &&
-              (uri.Scheme == Uri.UriSchemeHttps || uri.Scheme == Uri.UriSchemeHttp)))
-        {
-            return Problem(statusCode: StatusCodes.Status400BadRequest, title: "avatarUrl must be an http(s) URL");
-        }
+        if (!AvatarUrl.TryNormalize(req.AvatarUrl, out var avatar))
+            return Problem(statusCode: StatusCodes.Status400BadRequest, title: "avatarUrl must be a public https URL");
 
         var me = User.GetUserId();
         var user = await db.Users.FirstOrDefaultAsync(u => u.Id == me, ct);
         if (user is null) return NotFound();
 
         user.DisplayName = req.DisplayName.Trim();
-        user.AvatarUrl = string.IsNullOrWhiteSpace(req.AvatarUrl) ? null : req.AvatarUrl;
+        user.AvatarUrl = avatar;
         await db.SaveChangesAsync(ct);
 
         return new UserDto(user.Id, user.Login, user.DisplayName, user.AvatarUrl);

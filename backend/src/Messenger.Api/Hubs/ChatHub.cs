@@ -1,3 +1,5 @@
+using Messenger.Api.Data;
+using Microsoft.EntityFrameworkCore;
 using Messenger.Api.Messages;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.SignalR;
@@ -10,7 +12,7 @@ namespace Messenger.Api.Hubs;
 /// Рассылка идёт через Clients.Users(...) — работает между инстансами благодаря Redis backplane.
 /// </summary>
 [Authorize]
-public sealed class ChatHub(IMessageRepository messages, IDialogAccess dialogs, IPresenceTracker presence) : Hub
+public sealed class ChatHub(IMessageRepository messages, IDialogAccess dialogs, IPresenceTracker presence, AppDbContext db) : Hub
 {
     public const string Path = "/hubs/chat";
     private const int MaxTextLength = 4000;
@@ -28,7 +30,11 @@ public sealed class ChatHub(IMessageRepository messages, IDialogAccess dialogs, 
     public override async Task OnDisconnectedAsync(Exception? exception)
     {
         if (Context.UserIdentifier is { } userId && presence.UserDisconnected(userId, Context.ConnectionId))
-            await NotifyPresenceAsync(userId, "offline");
+        {
+            var now = DateTime.UtcNow;
+            await db.Users.Where(u => u.Id == userId).ExecuteUpdateAsync(u => u.SetProperty(x => x.LastSeenAt, now));
+            await NotifyPresenceAsync(userId, "offline", now);
+        }
         await base.OnDisconnectedAsync(exception);
     }
 
@@ -99,10 +105,19 @@ public sealed class ChatHub(IMessageRepository messages, IDialogAccess dialogs, 
         return contacts.Where(presence.IsOnline).ToList();
     }
 
-    private async Task NotifyPresenceAsync(string userId, string status)
+    /// <summary>«Был(а) в сети» для собеседников, которые сейчас не онлайн (userId → UTC).</summary>
+    public async Task<IReadOnlyDictionary<string, DateTime>> GetLastSeen()
+    {
+        var contacts = (await dialogs.GetContactIdsAsync(UserId)).Where(c => !presence.IsOnline(c)).ToList();
+        var rows = await db.Users.AsNoTracking().Where(u => contacts.Contains(u.Id) && u.LastSeenAt != null)
+            .Select(u => new { u.Id, At = u.LastSeenAt!.Value }).ToListAsync();
+        return rows.ToDictionary(r => r.Id, r => DateTime.SpecifyKind(r.At, DateTimeKind.Utc));
+    }
+
+    private async Task NotifyPresenceAsync(string userId, string status, DateTime? lastSeen = null)
     {
         var contacts = await dialogs.GetContactIdsAsync(userId);
         if (contacts.Count > 0)
-            await Clients.Users(contacts).SendAsync("PresenceChanged", userId, status);
+            await Clients.Users(contacts).SendAsync("PresenceChanged", userId, status, lastSeen);
     }
 }

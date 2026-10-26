@@ -42,7 +42,7 @@ async function req<T>(method: string, path: string, body?: unknown): Promise<T> 
   return data as T;
 }
 
-export const register = (v: { login: string; email: string; password: string; displayName: string }) =>
+export const register = (v: { login: string; email: string; password: string; displayName?: string }) =>
   req<AuthResponse>('POST', '/api/auth/register', v);
 export const login = (login: string, password: string) => req<AuthResponse>('POST', '/api/auth/login', { login, password });
 export const logout = () => req<void>('POST', '/api/auth/logout');

@@ -64,7 +64,7 @@ function ProfileSection() {
         <label className="lbl">Имя<input className="field" value={name} maxLength={60} onChange={(e) => setName(e.target.value)} /></label>
         {!nameOk && <div className="err">Введите имя — от 1 до 60 символов.</div>}
         <label className="lbl">Ссылка на аватар<input className="field" value={url} placeholder="https://…" inputMode="url" onChange={(e) => setUrl(e.target.value)} /></label>
-        {!urlOk && <div className="err">Нужна ссылка, начинающаяся с http:// или https://.</div>}
+        {!urlOk && <div className="err">Нужна публичная ссылка, начинающаяся с https://.</div>}
         <label className="lbl">Логин<input className="field" value={u.login} disabled /></label>
         <div className="hint">Логин изменить нельзя.</div>
         <div className="err" role="alert">{err}</div>
