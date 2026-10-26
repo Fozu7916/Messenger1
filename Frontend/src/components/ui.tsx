@@ -1,8 +1,8 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
 import { initials } from '../lib/format';
 
-// Приглушённые цвета: читаются и на светлой, и на тёмной теме
-const PALETTE = ['#5b7cfa', '#e0795b', '#3aa58a', '#c4893a', '#9b6bdc', '#d0607f', '#4a9cc9', '#7b8794'];
+// Оттенки серого: читаются и на светлой, и на тёмной теме
+const PALETTE = ['#3f3f46', '#52525b', '#71717a', '#57534e', '#78716c', '#4b5563', '#6b7280', '#44403c'];
 // Один и тот же человек всегда получает один и тот же цвет аватарки
 const colorOf = (s: string) => {
   let h = 0;

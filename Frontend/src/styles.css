@@ -1,23 +1,23 @@
 /* Минималистичная тема: нейтральные поверхности, один акцент, светлая и тёмная схемы по системе */
 :root{
-  --bg:#ffffff;--bg-2:#f5f6f8;--bg-3:#eceef1;--hover:rgba(15,20,30,.045);--sel:rgba(37,99,235,.09);
-  --line:#e5e7eb;--text:#0f172a;--muted:#64748b;--faint:#94a3b8;
-  --accent:#2563eb;--accent-hover:#1d4ed8;--on-accent:#ffffff;--accent-soft:rgba(37,99,235,.12);
-  --in:#f1f3f6;--out:#2563eb;--on-out:#ffffff;--on-out-muted:rgba(255,255,255,.72);
+  --bg:#ffffff;--bg-2:#f4f4f5;--bg-3:#e4e4e7;--hover:rgba(0,0,0,.04);--sel:#ececee;
+  --line:#e4e4e7;--text:#18181b;--muted:#71717a;--faint:#a1a1aa;
+  --accent:#27272a;--accent-hover:#3f3f46;--on-accent:#ffffff;--accent-soft:rgba(39,39,42,.12);
+  --in:#f4f4f5;--out:#3f3f46;--on-out:#fafafa;--on-out-muted:rgba(250,250,250,.65);
   --ok:#16a34a;--danger:#dc2626;--danger-soft:rgba(220,38,38,.08);
-  --shadow:0 1px 2px rgba(15,23,42,.06),0 8px 24px rgba(15,23,42,.08);
+  --shadow:0 1px 2px rgba(0,0,0,.05),0 8px 24px rgba(0,0,0,.07);
   --radius:12px;--side:340px;--head:60px;
   --font:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
   color-scheme:light;
 }
 @media (prefers-color-scheme:dark){
   :root{
-    --bg:#0e1013;--bg-2:#15181c;--bg-3:#1c2025;--hover:rgba(255,255,255,.045);--sel:rgba(96,140,255,.14);
-    --line:#23272e;--text:#e6e8eb;--muted:#8b93a1;--faint:#5d6573;
-    --accent:#4f7dff;--accent-hover:#6a91ff;--accent-soft:rgba(79,125,255,.16);
-    --in:#1b1f25;--out:#3563e9;--on-out-muted:rgba(255,255,255,.7);
+    --bg:#111113;--bg-2:#18181b;--bg-3:#27272a;--hover:rgba(255,255,255,.045);--sel:#232326;
+    --line:#27272a;--text:#e4e4e7;--muted:#a1a1aa;--faint:#71717a;
+    --accent:#e4e4e7;--accent-hover:#ffffff;--on-accent:#18181b;--accent-soft:rgba(228,228,231,.14);
+    --in:#1f1f23;--out:#3f3f46;--on-out:#fafafa;--on-out-muted:rgba(250,250,250,.6);
     --ok:#22c55e;--danger:#f87171;--danger-soft:rgba(248,113,113,.1);
-    --shadow:0 1px 2px rgba(0,0,0,.3),0 12px 32px rgba(0,0,0,.4);
+    --shadow:0 1px 2px rgba(0,0,0,.3),0 12px 32px rgba(0,0,0,.45);
     color-scheme:dark;
   }
 }
@@ -103,7 +103,7 @@ h1,h2,h3{margin:0;font-weight:600;letter-spacing:-.01em}
 .pane-head .t{flex:1;min-width:0}
 .pane-head .n{font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .pane-head .s{font-size:13px;color:var(--muted)}
-.pane-head .s.on,.pane-head .s.typing{color:var(--accent)}
+.pane-head .s.on,.pane-head .s.typing{color:var(--text)}
 .back{display:none}
 .blank{flex:1;display:grid;place-items:center;padding:24px;text-align:center;color:var(--muted)}
 .blank h2{font-size:16px;color:var(--text);margin-bottom:4px}
@@ -142,7 +142,7 @@ h1,h2,h3{margin:0;font-weight:600;letter-spacing:-.01em}
 
 .editbar{display:flex;align-items:center;gap:10px;max-width:760px;width:calc(100% - 40px);margin:0 auto;padding:8px 0 0;font-size:13px;color:var(--muted)}
 .editbar span{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;border-left:2px solid var(--accent);padding-left:10px}
-.editbar b{color:var(--accent);font-weight:500}
+.editbar b{color:var(--text);font-weight:500}
 .comp{flex:none;padding:10px 20px 14px}
 .comp-box{display:flex;align-items:flex-end;gap:8px;max-width:760px;margin:0 auto;padding:6px 6px 6px 14px;border:1px solid var(--line);border-radius:14px;background:var(--bg);transition:border-color .15s,box-shadow .15s}
 .comp-box:focus-within{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
