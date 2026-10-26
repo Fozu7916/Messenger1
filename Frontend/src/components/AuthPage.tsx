@@ -47,13 +47,14 @@ export function AuthPage() {
   const errors = {
     login: reg ? checkLogin(v.login) : '',
     email: reg ? checkEmail(v.email) : '',
-    password: checkPass(v.password),
+    password: reg ? checkPass(v.password) : '',
     id: !reg && !v.id.trim() ? 'Введите логин или email' : '',
   };
 
+  // При входе длину пароля не проверяем — достаточно, чтобы он был введён (решает сервер).
   const hasErrors = reg
     ? !!(errors.login || errors.email || errors.password)
-    : !!(errors.id || errors.password);
+    : !!(errors.id || !v.password);
 
   const show = (k: keyof typeof errors) =>
     touched[k] ? errors[k] : '';
@@ -139,7 +140,8 @@ export function AuthPage() {
             {reg
               ? field('email', 'Email',
                 <input className="field" name="email" type="email" inputMode="email" autoComplete="email" maxLength={254}
-                  value={v.email} onChange={set('email')} onBlur={blur('email')} {...aria('email')} />)
+                  value={v.email} onChange={set('email')} onBlur={blur('email')} {...aria('email')} />,
+                'Например, name@example.com')
               : field('id', 'Логин или email',
                 <input className="field" name="username" autoComplete="username" autoFocus
                   value={v.id} onChange={set('id')} onBlur={blur('id')} {...aria('id')} />)}
