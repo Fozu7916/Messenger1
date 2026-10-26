@@ -33,8 +33,7 @@ public sealed class UpdateProfileRequest
     [Required, MaxLength(64)]
     public string DisplayName { get; init; } = "";
 
-    [MaxLength(AvatarUrl.MaxLength)]
-    public string? AvatarUrl { get; init; }
+    [MaxLength(2048)]    public string? AvatarUrl { get; init; }
 }
 
 public sealed class CreateDialogRequest
