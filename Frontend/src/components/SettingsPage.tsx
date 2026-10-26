@@ -3,30 +3,49 @@ import { useAuth } from '../lib/auth';
 import { useChat } from '../lib/chat';
 import { isHttpUrl } from '../lib/format';
 import { beep, desktopSupported, enableDesktop, getNotifyPrefs, setNotifyPrefs } from '../lib/notify';
-import { Avatar, useToast } from './ui';
+import { Avatar, Icon, useToast } from './ui';
 
 type Section = 'profile' | 'notify' | 'sync' | 'session';
 const SECTIONS: [Section, string][] = [['profile', 'Профиль'], ['notify', 'Уведомления'], ['sync', 'Синхронизация'], ['session', 'Сессия']];
 
-export function SettingsPage() {
+export function SettingsPage({ onBack }: { onBack: () => void }) {
+  const { session } = useAuth();
   const [section, setSection] = useState<Section>('profile');
+  const [open, setOpen] = useState(false);   // мобильная раскладка: раздел открыт поверх списка
+  const u = session!.user;
   return (
-    <div className="settings">
-      <aside className="side settings-nav">
-        <h3>Настройки</h3>
-        <div role="tablist" className="snav">
-          {SECTIONS.map(([id, label]) => (
-            <button key={id} role="tab" className="row" aria-selected={section === id} aria-current={section === id} onClick={() => setSection(id)}>
-              <div className="t"><div className="n">{label}</div></div>
+    <div className={'main ' + (open ? 'open' : '')}>
+      <aside className="side">
+        <div className="side-head">
+          <button className="icon-btn" onClick={onBack} aria-label="Назад к чатам" title="Назад к чатам"><Icon.Back /></button>
+          <div className="title"><h1>Настройки</h1></div>
+        </div>
+        <div className="list">
+          <button className="row" onClick={() => { setSection('profile'); setOpen(true); }} aria-current={section === 'profile'}>
+            <Avatar name={u.displayName} url={u.avatarUrl} size={40} />
+            <div className="t"><div className="n"><span>{u.displayName}</span></div><div className="m"><span>@{u.login}</span></div></div>
+          </button>
+          {SECTIONS.filter(([id]) => id !== 'profile').map(([id, label]) => (
+            <button key={id} className="row" aria-current={section === id}
+              onClick={() => { setSection(id); setOpen(true); }}>
+              <div className="t"><div className="n"><span>{label}</span></div></div>
             </button>
           ))}
         </div>
       </aside>
-      <section className="panel">
-        {section === 'profile' && <ProfileSection />}
-        {section === 'notify' && <NotifySection />}
-        {section === 'sync' && <SyncSection />}
-        {section === 'session' && <SessionSection />}
+      <section className="pane">
+        <div className="pane-head">
+          <button className="icon-btn back" onClick={() => setOpen(false)} aria-label="К разделам"><Icon.Back /></button>
+          <div className="t"><div className="n">{SECTIONS.find(([id]) => id === section)![1]}</div></div>
+        </div>
+        <div className="panel">
+          <div className="panel-inner">
+            {section === 'profile' && <ProfileSection />}
+            {section === 'notify' && <NotifySection />}
+            {section === 'sync' && <SyncSection />}
+            {section === 'session' && <SessionSection />}
+          </div>
+        </div>
       </section>
     </div>
   );
@@ -53,20 +72,18 @@ function ProfileSection() {
   };
 
   return (
-    <form onSubmit={save}>
-      <h2 className="ptitle">Профиль</h2>
-      <p className="sub">Так вас видят собеседники.</p>
+    <form onSubmit={save} className="form">
+      <div><h2>Профиль</h2><p className="lead">Так вас видят собеседники.</p></div>
       <div className="me-card">
-        <Avatar name={name || u.login} url={urlOk ? url.trim() : ''} size={88} />
+        <Avatar name={name || u.login} url={urlOk ? url.trim() : ''} size={64} />
         <div><div className="me-name">{name.trim() || '—'}</div><div className="hint">@{u.login}</div></div>
       </div>
-      <div className="form narrow">
+      <div className="form">
         <label className="lbl">Имя<input className="field" value={name} maxLength={60} onChange={(e) => setName(e.target.value)} /></label>
         {!nameOk && <div className="err">Введите имя — от 1 до 60 символов.</div>}
         <label className="lbl">Ссылка на аватар<input className="field" value={url} placeholder="https://…" inputMode="url" onChange={(e) => setUrl(e.target.value)} /></label>
         {!urlOk && <div className="err">Нужна публичная ссылка, начинающаяся с https://.</div>}
-        <label className="lbl">Логин<input className="field" value={u.login} disabled /></label>
-        <div className="hint">Логин изменить нельзя.</div>
+        <label className="lbl">Логин<input className="field" value={u.login} disabled title="Логин изменить нельзя" /></label>
         <div className="err" role="alert">{err}</div>
         <div className="actions">
           <button type="button" className="ghost" disabled={!dirty || busy} onClick={() => { setName(u.displayName); setUrl(u.avatarUrl ?? ''); setErr(''); }}>Сбросить</button>
@@ -85,8 +102,8 @@ function NotifySection() {
 
   return (
     <>
-      <h2 className="ptitle">Уведомления</h2>
-      <p className="hint">Работают, пока вкладка с мессенджером открыта. Новые сообщения также видны в заголовке вкладки.</p>
+      <div><h2>Уведомления</h2><p className="lead">Работают, пока вкладка с мессенджером открыта. Число непрочитанных видно в заголовке вкладки.</p></div>
+      <div className="card" style={{ paddingTop: 4, paddingBottom: 4 }}>
       <label className="check">
         <input type="checkbox" checked={prefs.sound} onChange={(e) => { update({ ...prefs, sound: e.target.checked }); if (e.target.checked) beep(); }} />
         <span>Звук при новом сообщении</span>
@@ -103,6 +120,7 @@ function NotifySection() {
           {denied && <small>Запрещено в настройках браузера для этого сайта</small>}
         </span>
       </label>
+      </div>
     </>
   );
 }
@@ -124,23 +142,24 @@ function SyncSection() {
   const label = { online: 'Подключено', connecting: 'Подключаемся…', offline: 'Нет соединения' }[status];
 
   return (
-    <div>
-      <h2 className="ptitle">Синхронизация</h2>
-      <p className="sub">Сообщения хранятся на устройстве, поэтому работают без сети и уходят при возвращении соединения.</p>
+    <>
+      <div><h2>Синхронизация</h2><p className="lead">Переписка хранится на устройстве: работает без сети, сообщения уходят, когда соединение вернётся.</p></div>
+      <div className="card" style={{ paddingTop: 4, paddingBottom: 4 }}>
       <div className="kv"><span>Соединение</span><b className={'dot ' + status}>{label}</b></div>
       <div className="kv"><span>Диалогов на устройстве</span><b>{counts?.[0] ?? '—'}</b></div>
       <div className="kv"><span>Сообщений на устройстве</span><b>{counts?.[1] ?? '—'}</b></div>
       <div className="kv"><span>Ждут отправки</span><b>{counts?.[2] ?? '—'}</b></div>
       {error && <div className="kv"><span>Последняя ошибка</span><b>{error}</b></div>}
+      </div>
       <div className="actions left">
         <button className="btn" disabled={busy || status !== 'online'} onClick={() => run(resync, 'Синхронизировано')}>Синхронизировать сейчас</button>
-        <button className="ghost" disabled={busy || status !== 'online'}
+        <button className={'ghost' + (confirm ? ' danger' : '')} disabled={busy || status !== 'online'}
           onClick={() => { if (!confirm) { setConfirm(true); setTimeout(() => setConfirm(false), 3000); return; } setConfirm(false); void run(resetLocal, 'Кэш очищен и загружен заново'); }}>
           {confirm ? 'Точно очистить?' : 'Очистить локальный кэш'}
         </button>
       </div>
       <p className="hint">Очистка удалит копию переписки с этого устройства и загрузит её с сервера заново. Неотправленные сообщения будут потеряны.</p>
-    </div>
+    </>
   );
 }
 
@@ -148,12 +167,13 @@ function SessionSection() {
   const { session, logout } = useAuth();
   const until = new Date(session!.expiresAt).toLocaleString('ru', { dateStyle: 'long', timeStyle: 'short' });
   return (
-    <div>
-      <h2 className="ptitle">Сессия</h2>
-      <p className="sub">Вход действует ограниченное время, затем потребуется войти снова.</p>
-      <div className="kv"><span>Аккаунт</span><b>@{session!.user.login}</b></div>
-      <div className="kv"><span>Сессия действует до</span><b>{until}</b></div>
-      <div className="actions left"><button className="btn" onClick={logout}>Выйти из аккаунта</button></div>
-    </div>
+    <>
+      <div><h2>Сессия</h2><p className="lead">Пока вкладка открыта, сессия продлевается автоматически. При выходе локальная копия переписки удаляется с устройства.</p></div>
+      <div className="card" style={{ paddingTop: 4, paddingBottom: 4 }}>
+        <div className="kv"><span>Аккаунт</span><b>@{session!.user.login}</b></div>
+        <div className="kv"><span>Токен действует до</span><b>{until}</b></div>
+      </div>
+      <div className="actions left"><button className="ghost danger" onClick={logout}>Выйти из аккаунта</button></div>
+    </>
   );
 }

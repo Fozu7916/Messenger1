@@ -1,12 +1,7 @@
 
 import { useState, type FormEvent, type ReactNode } from 'react';
 import { useAuth } from '../lib/auth';
-
-const POINTS = [
-  'Сообщения приходят мгновенно',
-  'История всегда под рукой',
-  'Доступ к диалогу — только у участников',
-];
+import { Icon } from './ui';
 
 const EMAIL_RE = /^[^\s@]+@[^\s@.]+(?:\.[^\s@.]+)*\.[A-Za-z]{2,}$/;
 const LOGIN_RE = /^[a-zA-Z0-9_]{3,32}$/;
@@ -116,211 +111,57 @@ export function AuthPage() {
     }
   };
 
-  const field = (
-    k: keyof typeof errors,
-    input: ReactNode,
-    hint?: string,
-  ) => (
-    <div className="fld">
+  const field = (k: keyof typeof errors, label: string, input: ReactNode, hint?: string) => (
+    <label className="lbl fld">
+      {label}
       {input}
-
-      {show(k) ? (
-        <div
-          className="err"
-          id={`${k}-e`}
-          role="alert"
-        >
-          {show(k)}
-        </div>
-      ) : hint ? (
-        <p className="hint">{hint}</p>
-      ) : null}
-    </div>
+      {show(k) ? <span className="err" id={`${k}-e`} role="alert">{show(k)}</span> : hint ? <span className="hint">{hint}</span> : null}
+    </label>
   );
+  const aria = (k: keyof typeof errors) => ({ 'aria-invalid': !!show(k), 'aria-describedby': show(k) ? `${k}-e` : undefined });
 
   return (
-    <div className="auth">
-      <div className="banner">
-        Личная переписка без установки приложений
-      </div>
-
-      <div className="hero">
-        <div>
-          <h1>Безопасность превыше всего</h1>
-
-          <ul>
-            {POINTS.map((t) => (
-              <li key={t}>
-                <b>
-                  <svg viewBox="0 0 12 12" aria-hidden="true">
-                    <path d="M2 6.5l2.6 2.6L10 3.5" />
-                  </svg>
-                </b>
-                {t}
-              </li>
-            ))}
-          </ul>
-
-          <div className="preview" aria-hidden="true">
-            <div className="msg in">
-              Привет! Ты уже в сети?
-            </div>
-            <div className="msg out">
-              Да, вечером в доту?
-            </div>
-            <div className="msg in">
-              Сёдня не, у мя идз просрочено
-            </div>
+    <main className="auth">
+      <div className="auth-box">
+        <div className="brand"><span className="brand-mark"><Icon.Chat /></span>Мессенджер</div>
+        <form className="auth-card" onSubmit={submit} noValidate key={mode} autoComplete="on">
+          <div className="seg" role="tablist">
+            <button type="button" role="tab" aria-selected={!reg} onClick={() => switchMode('login')}>Вход</button>
+            <button type="button" role="tab" aria-selected={reg} onClick={() => switchMode('register')}>Регистрация</button>
           </div>
-        </div>
-
-        <form
-          className="card"
-          onSubmit={submit}
-          noValidate
-          key={mode}
-          autoComplete="on"
-        >
-          <div className="tabs" role="tablist">
-            <button
-              type="button"
-              role="tab"
-              className="ghost"
-              aria-selected={!reg}
-              onClick={() => switchMode('login')}
-            >
-              Вход
-            </button>
-
-            <button
-              type="button"
-              role="tab"
-              className="ghost"
-              aria-selected={reg}
-              onClick={() => switchMode('register')}
-            >
-              Регистрация
-            </button>
-          </div>
-
-          <h2>
-            {reg ? 'Создайте аккаунт' : 'С возвращением'}
-          </h2>
-
-          <p className="sub" />
-
+          <h2>{reg ? 'Создать аккаунт' : 'С возвращением'}</h2>
+          <p className="lead">{reg ? 'Пара полей — и можно переписываться.' : 'Войдите по логину или email.'}</p>
           <div className="form">
-            {reg &&
-              field(
-                'login',
-                <input
-                  className="field"
-                  name="username"
-                  placeholder="Логин"
-                  autoComplete="username"
-                  maxLength={32}
-                  value={v.login}
-                  onChange={set('login')}
-                  onBlur={blur('login')}
-                  aria-invalid={!!show('login')}
-                  aria-describedby={
-                    show('login') ? 'login-e' : undefined
-                  }
-                />,
-                '3–32 символа: латиница, цифры, _',
-              )}
-
+            {reg && field('login', 'Логин',
+              <input className="field" name="username" autoComplete="username" maxLength={32}
+                value={v.login} onChange={set('login')} onBlur={blur('login')} {...aria('login')} />,
+              'Латиница, цифры и _, от 3 до 32 символов')}
             {reg
-              ? field(
-                  'email',
-                  <input
-                    className="field"
-                    name="email"
-                    type="email"
-                    inputMode="email"
-                    placeholder="Email"
-                    autoComplete="email"
-                    maxLength={254}
-                    value={v.email}
-                    onChange={set('email')}
-                    onBlur={blur('email')}
-                    aria-invalid={!!show('email')}
-                    aria-describedby={
-                      show('email') ? 'email-e' : undefined
-                    }
-                  />,
-                )
-              : field(
-                  'id',
-                  <input
-                    className="field"
-                    name="username"
-                    placeholder="Логин или email"
-                    autoComplete="username"
-                    value={v.id}
-                    onChange={set('id')}
-                    onBlur={blur('id')}
-                    aria-invalid={!!show('id')}
-                    aria-describedby={
-                      show('id') ? 'id-e' : undefined
-                    }
-                  />,
-                )}
-
-            {field(
-              'password',
-              <input
-                className="field"
-                name="password"
-                type="password"
-                maxLength={72}
-                placeholder="Пароль"
-                autoComplete={
-                  reg ? 'new-password' : 'current-password'
-                }
-                value={v.password}
-                onChange={set('password')}
-                onBlur={blur('password')}
-                aria-invalid={!!show('password')}
-                aria-describedby={
-                  show('password') ? 'password-e' : undefined
-                }
-              />,
-              reg ? PASS_HINT : undefined,
-            )}
-
+              ? field('email', 'Email',
+                <input className="field" name="email" type="email" inputMode="email" autoComplete="email" maxLength={254}
+                  value={v.email} onChange={set('email')} onBlur={blur('email')} {...aria('email')} />)
+              : field('id', 'Логин или email',
+                <input className="field" name="username" autoComplete="username" autoFocus
+                  value={v.id} onChange={set('id')} onBlur={blur('id')} {...aria('id')} />)}
+            {field('password', 'Пароль',
+              <input className="field" name="password" type="password" maxLength={72}
+                autoComplete={reg ? 'new-password' : 'current-password'}
+                value={v.password} onChange={set('password')} onBlur={blur('password')} {...aria('password')} />,
+              reg ? PASS_HINT : undefined)}
             {reg && (
-              <input
-                className="field"
-                name="displayName"
-                placeholder="Имя (необязательно)"
-                autoComplete="nickname"
-                maxLength={64}
-                value={v.name}
-                onChange={set('name')}
-              />
+              <label className="lbl fld">
+                <span>Имя <span style={{ fontWeight: 400 }}>· необязательно</span></span>
+                <input className="field" name="displayName" autoComplete="nickname" maxLength={64} value={v.name} onChange={set('name')} />
+              </label>
             )}
-
-            {err && (
-              <div className="err" role="alert">
-                {err}
-              </div>
-            )}
-
-            <button
-              className="btn big"
-              type="submit"
-              disabled={busy}
-            >
-              {busy
-                ? 'Подождите…'
-                : reg
-                  ? 'Зарегистрироваться'
-                  : 'Войти'}
+            {err && <p className="err" role="alert">{err}</p>}
+            <button className="btn block" type="submit" disabled={busy}>
+              {busy ? 'Подождите…' : reg ? 'Зарегистрироваться' : 'Войти'}
             </button>
           </div>
         </form>
+        <p className="auth-foot">Переписка доступна только её участникам.</p>
       </div>
-    </div>
+    </main>
   );
 }

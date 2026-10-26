@@ -53,9 +53,11 @@ const create = async (name: string): Promise<DB> => {
   return db;
 };
 
+const dbName = (userId: string) => 'messenger3-' + userId.toLowerCase();
+
 export async function openDb(userId: string): Promise<DB> {
   await S.closing;
-  const name = 'messenger3-' + userId.toLowerCase();
+  const name = dbName(userId);
   if (S.cache?.name === name) return S.cache.p;
   const p = create(name).catch(async (e) => {
     // Повреждённую БД или несовпавшую схему пересоздаём (копия восстановится с сервера).
@@ -75,4 +77,10 @@ export function closeDb(): Promise<void> {
   const c = S.cache; S.cache = null;
   S.closing = (async () => { if (c) { try { await (await c.p).close(); } catch { /* ignore */ } } })();
   return S.closing;
+}
+
+/** Явный выход: копия переписки не должна оставаться на устройстве (общий компьютер и т. п.). */
+export async function wipeDb(userId: string): Promise<void> {
+  await closeDb();
+  try { await removeRxDatabase(dbName(userId), getRxStorageDexie()); } catch (e) { console.warn('wipeDb failed', e); }
 }

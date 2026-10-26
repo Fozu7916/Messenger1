@@ -6,6 +6,14 @@ export const initials = (name: string) =>
 export const fmtTime = (ts: number) =>
   new Date(ts).toLocaleTimeString('ru', { hour: '2-digit', minute: '2-digit' });
 
+// Для списка диалогов: сегодня — время, на этой неделе — день недели, иначе — дата.
+export const fmtWhen = (ts: number, now = Date.now()) => {
+  const today = new Date(now).setHours(0, 0, 0, 0);
+  if (ts >= today) return fmtTime(ts);
+  if (ts >= today - 6 * 86_400_000) return new Date(ts).toLocaleDateString('ru', { weekday: 'short' });
+  return new Date(ts).toLocaleDateString('ru', { day: 'numeric', month: 'short' });
+};
+
 export const fmtDay = (ts: number) =>
   new Date(ts).toLocaleDateString('ru', { day: 'numeric', month: 'long' });
 

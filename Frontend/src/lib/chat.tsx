@@ -66,7 +66,6 @@ export function useLiveQuery<T>(make: (db: DB) => { $: Observable<any> } | null,
 export function ChatProvider({ children }: { children: ReactNode }) {
   const { session } = useAuth();
   const me = session!.user;
-  const token = session!.token;
   const toast = useToast();
 
   const [db, setDb] = useState<DB | null>(null);
@@ -83,7 +82,8 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   const activeRef = useRef<string | null>(null);
   const inflight = useRef(new Set<string>());
   const creating = useRef(new Map<string, Promise<string | null>>());
-  const chain = useRef<Promise<unknown>>(Promise.resolve());
+  const syncing = useRef<Promise<void> | null>(null);
+  const syncAgain = useRef(false);
   const timers = useRef<Record<string, number>>({});
   const lastTyping = useRef(0);
   const readMark = useRef(new Map<string, string>()); // dialogId → ULID, до которого уже отправили MarkRead
@@ -107,6 +107,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       for (const m of await d.messages.find({ selector: { dialogId: tempId } }).exec()) await m.incrementalPatch({ dialogId: dto.id });
       await tmp.remove();
       setRenamed((r) => ({ ...r, [tempId]: dto.id }));
+      void refreshPresence(); // новый собеседник — узнаём, в сети ли он
       return dto.id;
     })().finally(() => creating.current.delete(tempId));
     creating.current.set(tempId, p);
@@ -144,6 +145,15 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     }
   };
 
+  /** Локальная копия совпадает с последним сообщением на сервере — перекачивать историю не нужно. */
+  const upToDate = async (x: DialogDto) => {
+    const local = plain<MessageDoc>(await dbRef.current!.messages.find({ selector: { dialogId: x.id, status: 'sent', isDeleted: false } }).exec());
+    const top = local.filter((m) => m.id).sort((a, b) => (a.id < b.id ? 1 : -1))[0];
+    const last = x.lastMessage;
+    if (!last || !top) return !last && !top;
+    return top.id === last.id && top.text === last.text && top.editedAt === (last.editedAt ? Date.parse(last.editedAt) : 0);
+  };
+
   const syncDialogs = async () => {
     const d = dbRef.current!;
     const list: DialogDto[] = await api.dialogs();
@@ -157,8 +167,18 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       peerRead: x.peerLastReadId ?? '', pending: false,
     })));
     for (const x of local) if (x.pending) void materialize(x.id).catch(() => {}); // досоздаём офлайн-диалоги
-    const res = await Promise.allSettled(list.map((x) => syncMessages(x.id)));
-    res.forEach((r) => r.status === 'rejected' && console.error('syncMessages failed', r.reason));
+    // Историю качаем только там, где что-то изменилось (+ открытый диалог: в нём сверяем правки и удаления),
+    // и не больше 4 диалогов одновременно — иначе каждое переподключение превращается в шквал запросов.
+    const stale: string[] = [];
+    for (const x of list) if (x.id === activeRef.current || !(await upToDate(x))) stale.push(x.id);
+    let next = 0;
+    const worker = async () => {
+      while (next < stale.length) {
+        const id = stale[next++];
+        try { await syncMessages(id); } catch (e) { console.error('syncMessages failed', id, e); }
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(4, stale.length) }, worker));
   };
 
   // ---------- Отправка (Offline-First) ----------
@@ -200,7 +220,13 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     const a = activeRef.current;
     if (a && document.visibilityState === 'visible') void markRead(a);
   };
-  const sync = () => { chain.current = chain.current.then(runSync); return chain.current as Promise<void>; };
+  // Вызовы склеиваются: пока идёт синхронизация, новые запросы не встают в очередь, а дают ровно один повторный проход.
+  const sync = (): Promise<void> => {
+    if (syncing.current) { syncAgain.current = true; return syncing.current; }
+    const run = async () => { do { syncAgain.current = false; await runSync(); } while (syncAgain.current); };
+    syncing.current = run().finally(() => { syncing.current = null; });
+    return syncing.current;
+  };
 
   // ---------- Онлайн, «прочитано», уведомления ----------
   const refreshPresence = async () => {
@@ -287,7 +313,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       void sync(); // REST не зависит от SignalR: интерфейс наполняется, даже если хаб недоступен
 
       hub = new HubConnectionBuilder()
-        .withUrl(`${api.BASE}/hubs/chat`, { accessTokenFactory: () => token })
+        .withUrl(`${api.BASE}/hubs/chat`, { accessTokenFactory: () => api.getToken() ?? '' })
         .withAutomaticReconnect({ nextRetryDelayInMilliseconds: (c) => Math.min(1000 * 2 ** c.previousRetryCount, 15000) })
         .build();
       hubRef.current = hub;
@@ -316,6 +342,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         else if (info.peerRead < upTo) await doc.incrementalPatch({ peerRead: upTo });
       });
       hub.on('UserTyping', onTyping);
+      hub.on('DialogDeleted', (did: string) => void dropDialogLocal(did).catch(report));
       hub.on('PresenceChanged', (uid: string, st: string, at?: string | null) => {
         setPresence((p) => ({ ...p, [uid]: st === 'online' }));
         if (st !== 'online' && at) setLastSeen((p) => ({ ...p, [uid]: Date.parse(at) }));
@@ -355,7 +382,10 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     db, dbError, error, status, typing, presence, lastSeen, renamed,
     setActive: (id) => {
       activeRef.current = id;
-      if (id) { void clearUnread(id); void markRead(id); }
+      if (!id) return;
+      void clearUnread(id); void markRead(id);
+      // открытый диалог сверяем полностью: правки и удаления, сделанные пока нас не было
+      if (!isTemp(id)) void syncMessages(id).catch((e) => console.warn('dialog sync failed', e));
     },
     send: (dialogId, text) => {
       const m: MessageDoc = {

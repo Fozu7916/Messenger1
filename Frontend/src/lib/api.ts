@@ -9,6 +9,8 @@ export class ApiError extends Error {
 let token: string | null = null;
 let onUnauthorized: () => void = () => {};
 export const setToken = (t: string | null) => { token = t; };
+// SignalR берёт токен через эту функцию при каждом (пере)подключении — после продления сессии он уже новый.
+export const getToken = () => token;
 export const setUnauthorizedHandler = (fn: () => void) => { onUnauthorized = fn; };
 
 const FALLBACK: Record<number, string> = {
@@ -46,6 +48,7 @@ export const register = (v: { login: string; email: string; password: string; di
   req<AuthResponse>('POST', '/api/auth/register', v);
 export const login = (login: string, password: string) => req<AuthResponse>('POST', '/api/auth/login', { login, password });
 export const logout = () => req<void>('POST', '/api/auth/logout');
+export const refresh = () => req<AuthResponse>('POST', '/api/auth/refresh');
 export const updateMe = (v: { displayName: string; avatarUrl: string | null }) => req<User>('PUT', '/api/users/me', v);
 // Люди: без query — все пользователи по алфавиту (постранично), с query — поиск по логину и имени.
 export const users = (p: { query?: string; offset?: number; limit?: number } = {}) => {
