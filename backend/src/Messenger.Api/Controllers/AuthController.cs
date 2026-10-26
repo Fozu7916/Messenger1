@@ -55,7 +55,21 @@ public sealed class AuthController(AppDbContext db, ITokenService tokens) : Cont
         return Ok(ToResponse(user));
     }
 
-    /// <summary>JWT stateless: клиент просто удаляет токен. TODO: refresh-токены и их отзыв.</summary>
+    /// <summary>
+    /// Продление сессии: по ещё действующему токену выдаёт новый. Клиент вызывает заранее, до истечения,
+    /// поэтому активного пользователя не выкидывает на экран входа каждые AccessTokenMinutes.
+    /// </summary>
+    [HttpPost("refresh"), Authorize]
+    public async Task<ActionResult<AuthResponse>> Refresh(CancellationToken ct)
+    {
+        var me = User.GetUserId();
+        var user = await db.Users.AsNoTracking().FirstOrDefaultAsync(u => u.Id == me, ct);
+        if (user is null)
+            return Problem(statusCode: StatusCodes.Status401Unauthorized, title: "User no longer exists");
+        return Ok(ToResponse(user));
+    }
+
+    /// <summary>JWT stateless: клиент просто удаляет токен.</summary>
     [HttpPost("logout"), Authorize]
     public IActionResult Logout() => NoContent();
 

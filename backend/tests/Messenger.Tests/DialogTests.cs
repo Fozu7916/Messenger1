@@ -1,5 +1,6 @@
 using System.Net;
 using Messenger.Api.Contracts;
+using Microsoft.AspNetCore.SignalR.Client;
 
 namespace Messenger.Tests;
 
@@ -20,6 +21,44 @@ public sealed class DialogTests(ApiFactory factory)
         Assert.Equal(
             (await first.Content.ReadFromJsonAsync<DialogDto>())!.Id,
             (await second.Content.ReadFromJsonAsync<DialogDto>())!.Id);
+    }
+
+    [Fact]
+    public async Task Concurrent_dialog_creation_from_both_sides_yields_single_dialog()
+    {
+        var alice = await factory.RegisterAsync("alice");
+        var bob = await factory.RegisterAsync("bob");
+
+        var results = await Task.WhenAll(Enumerable.Range(0, 6).Select(i => i % 2 == 0
+            ? alice.Http.PostAsJsonAsync("/api/dialogs", new { userId = bob.User.Id })
+            : bob.Http.PostAsJsonAsync("/api/dialogs", new { userId = alice.User.Id })));
+
+        var ids = new HashSet<string>();
+        foreach (var r in results)
+        {
+            r.EnsureSuccessStatusCode();
+            ids.Add((await r.Content.ReadFromJsonAsync<DialogDto>())!.Id);
+        }
+        Assert.Single(ids);
+        Assert.Single(results, r => r.StatusCode == HttpStatusCode.Created);
+    }
+
+    [Fact]
+    public async Task Deleting_dialog_notifies_peer_in_real_time()
+    {
+        var alice = await factory.RegisterAsync("alice");
+        var bob = await factory.RegisterAsync("bob");
+        var dialog = await alice.CreateDialogAsync(bob);
+
+        var deleted = new TaskCompletionSource<string>();
+        await using var bobHub = factory.ConnectHub(bob.Token);
+        bobHub.On<string>("DialogDeleted", id => { deleted.TrySetResult(id); });
+        await bobHub.StartAsync();
+
+        var del = await alice.Http.DeleteAsync($"/api/dialogs/{dialog.Id}");
+
+        Assert.Equal(HttpStatusCode.NoContent, del.StatusCode);
+        Assert.Equal(dialog.Id, await deleted.Task.WaitAsync(TimeSpan.FromSeconds(10)));
     }
 
     [Fact]

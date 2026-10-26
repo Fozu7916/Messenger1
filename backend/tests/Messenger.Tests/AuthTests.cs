@@ -62,4 +62,27 @@ public sealed class AuthTests(ApiFactory factory)
 
         Assert.Equal(HttpStatusCode.Unauthorized, resp.StatusCode);
     }
+
+    [Fact]
+    public async Task Refresh_with_valid_token_issues_new_working_token()
+    {
+        var u = await factory.RegisterAsync("auth");
+
+        var resp = await u.Http.PostAsync("/api/auth/refresh", null);
+        Assert.Equal(HttpStatusCode.OK, resp.StatusCode);
+        var auth = (await resp.Content.ReadFromJsonAsync<AuthResponse>())!;
+        Assert.Equal(u.User.Id, auth.User.Id);
+
+        var http = factory.CreateClient();
+        http.DefaultRequestHeaders.Authorization = new("Bearer", auth.AccessToken);
+        Assert.Equal(HttpStatusCode.OK, (await http.GetAsync("/api/users/me")).StatusCode);
+    }
+
+    [Fact]
+    public async Task Refresh_without_token_returns_401()
+    {
+        var resp = await factory.CreateClient().PostAsync("/api/auth/refresh", null);
+
+        Assert.Equal(HttpStatusCode.Unauthorized, resp.StatusCode);
+    }
 }

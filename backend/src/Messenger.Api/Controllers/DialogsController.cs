@@ -2,15 +2,17 @@ using Messenger.Api.Auth;
 using Messenger.Api.Contracts;
 using Messenger.Api.Data;
 using Messenger.Api.Domain;
+using Messenger.Api.Hubs;
 using Messenger.Api.Messages;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.SignalR;
 using Microsoft.EntityFrameworkCore;
 
 namespace Messenger.Api.Controllers;
 
 [ApiController, Route("api/dialogs"), Authorize]
-public sealed class DialogsController(AppDbContext db, IMessageRepository messages) : ControllerBase
+public sealed class DialogsController(AppDbContext db, IMessageRepository messages, IDialogAccess access, IHubContext<ChatHub> hub) : ControllerBase
 {
     [HttpGet]
     public async Task<ActionResult<List<DialogDto>>> List(CancellationToken ct)
@@ -49,10 +51,7 @@ public sealed class DialogsController(AppDbContext db, IMessageRepository messag
             .ToList();
     }
 
-    /// <summary>
-    /// Создаёт личный диалог. Если диалог с этим пользователем уже есть — возвращает его (200).
-    /// TODO: при параллельных запросах возможен дубль; закрыть уникальным ключом пары участников.
-    /// </summary>
+    /// <summary>Создаёт личный диалог. Если диалог с этим пользователем уже есть — возвращает его (200).</summary>
     [HttpPost]
     public async Task<ActionResult<DialogDto>> Create(CreateDialogRequest req, CancellationToken ct)
     {
@@ -65,6 +64,12 @@ public sealed class DialogsController(AppDbContext db, IMessageRepository messag
             .Select(u => new UserDto(u.Id, u.Login, u.DisplayName, u.AvatarUrl))
             .FirstOrDefaultAsync(ct);
         if (peer is null) return NotFound();
+
+        // Оба собеседника могут открыть диалог одновременно (или клиент повторит запрос после обрыва сети).
+        // Транзакционная advisory-блокировка на пару участников сериализует «проверить → создать» и не даёт дублей.
+        var pair = string.CompareOrdinal(me, req.UserId) < 0 ? $"{me}:{req.UserId}" : $"{req.UserId}:{me}";
+        await using var tx = await db.Database.BeginTransactionAsync(ct);
+        await db.Database.ExecuteSqlInterpolatedAsync($"SELECT pg_advisory_xact_lock(hashtextextended({pair}, 0))", ct);
 
         var existing = await db.Dialogs.AsNoTracking()
             .Where(d => d.Members.Any(m => m.UserId == me) && d.Members.Any(m => m.UserId == req.UserId))
@@ -84,6 +89,7 @@ public sealed class DialogsController(AppDbContext db, IMessageRepository messag
         };
         db.Dialogs.Add(dialog);
         await db.SaveChangesAsync(ct);
+        await tx.CommitAsync(ct);
 
         return Created($"/api/dialogs/{dialog.Id}", new DialogDto(dialog.Id, dialog.CreatedAt, peer, null));
     }
@@ -93,9 +99,12 @@ public sealed class DialogsController(AppDbContext db, IMessageRepository messag
     public async Task<IActionResult> Delete(string id, CancellationToken ct)
     {
         var me = User.GetUserId();
-        var deleted = await db.Dialogs
-            .Where(d => d.Id == id && d.Members.Any(m => m.UserId == me))
-            .ExecuteDeleteAsync(ct);
-        return deleted == 0 ? NotFound() : NoContent();
+        var members = await access.GetMemberIdsAsync(id, ct);
+        if (!members.Contains(me)) return NotFound();
+
+        await db.Dialogs.Where(d => d.Id == id).ExecuteDeleteAsync(ct);
+        // Собеседник (и другие устройства удалившего) убирают диалог сразу, а не при следующей синхронизации.
+        await hub.Clients.Users(members).SendAsync("DialogDeleted", id, ct);
+        return NoContent();
     }
 }

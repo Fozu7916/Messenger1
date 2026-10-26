@@ -146,6 +146,7 @@ flowchart LR
 |-------|------|------------|-------|
 | POST | `/api/auth/register` | Регистрация | `200` `{accessToken, expiresAt, user}`; `409` если логин или email занят |
 | POST | `/api/auth/login` | Вход по логину или email | `200` `{accessToken, expiresAt, user}`; `401` при неверных данных |
+| POST | `/api/auth/refresh` | Продлить сессию по действующему токену | `200` `{accessToken, expiresAt, user}` |
 | POST | `/api/auth/logout` | Выход (клиент удаляет токен) | `204` |
 | GET | `/api/users/me` | Свой профиль | `200` `user` |
 | PUT | `/api/users/me` | Изменить `displayName`, `avatarUrl` (только http/https) | `200` `user` |
@@ -188,6 +189,7 @@ dialog  { id, createdAt, peer: user, lastMessage: message | null }
 | клиент → сервер | `Typing(dialogId)` | Статус «печатает» |
 | сервер → клиент | `UserTyping(dialogId, userId)` | Собеседник печатает |
 | сервер → клиент | `PresenceChanged(userId, status)` | `online` / `offline` для тех, с кем есть диалоги |
+| сервер → клиент | `DialogDeleted(dialogId)` | Диалог удалён одним из участников |
 
 Ошибки хаба приходят клиенту как `HubException` с кодом в сообщении: `forbidden` (не участник диалога), `invalid_text`, `invalid_client_message_id`, `unauthorized`.
 

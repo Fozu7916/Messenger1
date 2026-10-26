@@ -69,7 +69,7 @@ builder.Services.AddAuthorization();
 builder.Services.Configure<ForwardedHeadersOptions>(o =>
 {
     o.ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto;
-    o.KnownNetworks.Clear();   // если warning "obsolete" — замените на KnownIPNetworks.Clear()
+    o.KnownIPNetworks.Clear();
     o.KnownProxies.Clear();
 });
 

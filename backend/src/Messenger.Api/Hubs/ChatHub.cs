@@ -8,7 +8,7 @@ namespace Messenger.Api.Hubs;
 
 /// <summary>
 /// Клиент → сервер: SendMessage, Typing, MarkRead, GetOnlineContacts.
-/// Сервер → клиент: MessageReceived, MessageAcked, MessageDeleted, MessageEdited, MessagesRead, UserTyping, PresenceChanged.
+/// Сервер → клиент: MessageReceived, MessageAcked, MessageDeleted, MessageEdited, MessagesRead, UserTyping, PresenceChanged, DialogDeleted.
 /// Рассылка идёт через Clients.Users(...) — работает между инстансами благодаря Redis backplane.
 /// </summary>
 [Authorize]

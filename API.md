@@ -78,10 +78,12 @@ POST /api/auth/login
 В `login` можно передать логин или email. Ответ `200` — `AuthResponse`, неверные данные — `401`.
 
 ```http
+POST /api/auth/refresh       → 200 AuthResponse
 POST /api/auth/logout        → 204
 ```
 
-Выход stateless: клиент просто удаляет токен и закрывает соединение хаба.
+`refresh` по ещё действующему токену выдаёт новый — клиент вызывает его заранее, до истечения, поэтому активная сессия не обрывается.
+Выход stateless: клиент удаляет токен, закрывает соединение хаба и стирает локальную копию переписки.
 
 ### Профиль и поиск
 
@@ -181,6 +183,7 @@ const serverUlid = await connection.invoke<string>(
 | `MessageReceived` | `Message` | Всем участникам диалога, **включая отправителя** (его другие вкладки и устройства) |
 | `MessageAcked` | `clientMessageId`, `serverUlid` | Только соединению, которое отправило сообщение |
 | `MessageDeleted` | `dialogId`, `messageId` | Всем участникам диалога |
+| `DialogDeleted` | `dialogId` | Всем участникам удалённого диалога |
 | `UserTyping` | `dialogId`, `userId` | Остальным участникам диалога |
 | `PresenceChanged` | `userId`, `status` | Тем, с кем у пользователя есть диалоги |
 
