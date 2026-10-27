@@ -17,6 +17,8 @@ public class Dialog
 {
     public string Id { get; set; } = Ulid.NewUlid().ToString();
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+    /// <summary>"меньшийId:большийId" — уникальный ключ пары, защищает от дублей при параллельном создании.</summary>
+    public string? PairKey { get; set; }
     public List<DialogMember> Members { get; } = [];
     public List<Message> Messages { get; } = [];
 }
@@ -54,4 +56,16 @@ public class MessageHide
     public string MessageId { get; set; } = "";
     public string UserId { get; set; } = "";
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+}
+
+public class RefreshToken
+{
+    public string Id { get; set; } = Ulid.NewUlid().ToString();
+    public string UserId { get; set; } = "";
+    /// <summary>SHA-256 (hex) от выданного значения; сам токен в БД не хранится.</summary>
+    public string TokenHash { get; set; } = "";
+    public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+    public DateTime ExpiresAt { get; set; }
+    public DateTime? RevokedAt { get; set; }
+    public string? ReplacedById { get; set; }
 }

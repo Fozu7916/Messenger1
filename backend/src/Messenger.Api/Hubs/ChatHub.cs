@@ -12,7 +12,7 @@ namespace Messenger.Api.Hubs;
 /// Рассылка идёт через Clients.Users(...) — работает между инстансами благодаря Redis backplane.
 /// </summary>
 [Authorize]
-public sealed class ChatHub(IMessageRepository messages, IDialogAccess dialogs, IPresenceTracker presence, AppDbContext db) : Hub
+public sealed class ChatHub(IMessageRepository messages, IDialogAccess dialogs, IPresenceTracker presence, AppDbContext db, HubRateLimiter limits) : Hub
 {
     public const string Path = "/hubs/chat";
     private const int MaxTextLength = 4000;
@@ -45,6 +45,8 @@ public sealed class ChatHub(IMessageRepository messages, IDialogAccess dialogs, 
     public async Task<string> SendMessage(string clientMessageId, string dialogId, string text)
     {
         var senderId = UserId;
+        if (!limits.TryAcquire("send:" + senderId, 20, TimeSpan.FromSeconds(10)))
+            throw new HubException("rate_limited");
         text = text?.Trim() ?? "";
 
         if (string.IsNullOrWhiteSpace(clientMessageId) || clientMessageId.Length > MaxClientMessageIdLength)
@@ -73,6 +75,7 @@ public sealed class ChatHub(IMessageRepository messages, IDialogAccess dialogs, 
 
     public async Task Typing(string dialogId)
     {
+        if (!limits.TryAcquire("typing:" + UserId, 1, TimeSpan.FromSeconds(1))) return;   // «печатает» можно молча пропускать
         var members = await dialogs.GetMemberIdsAsync(dialogId ?? "");
         if (!members.Contains(UserId))
             throw new HubException("forbidden");
@@ -87,6 +90,7 @@ public sealed class ChatHub(IMessageRepository messages, IDialogAccess dialogs, 
     /// </summary>
     public async Task MarkRead(string dialogId, string upToId)
     {
+        if (!limits.TryAcquire("read:" + UserId, 60, TimeSpan.FromSeconds(10))) throw new HubException("rate_limited");
         var members = await dialogs.GetMemberIdsAsync(dialogId ?? "");
         if (!members.Contains(UserId))
             throw new HubException("forbidden");
@@ -101,6 +105,7 @@ public sealed class ChatHub(IMessageRepository messages, IDialogAccess dialogs, 
     /// <summary>Кто из собеседников сейчас онлайн. Клиент вызывает при (пере)подключении, чтобы не ждать событий PresenceChanged.</summary>
     public async Task<IReadOnlyList<string>> GetOnlineContacts()
     {
+        if (!limits.TryAcquire("online:" + UserId, 20, TimeSpan.FromMinutes(1))) throw new HubException("rate_limited");
         var contacts = await dialogs.GetContactIdsAsync(UserId);
         return contacts.Where(presence.IsOnline).ToList();
     }
@@ -108,6 +113,7 @@ public sealed class ChatHub(IMessageRepository messages, IDialogAccess dialogs, 
     /// <summary>«Был(а) в сети» для собеседников, которые сейчас не онлайн (userId → UTC).</summary>
     public async Task<IReadOnlyDictionary<string, DateTime>> GetLastSeen()
     {
+        if (!limits.TryAcquire("seen:" + UserId, 20, TimeSpan.FromMinutes(1))) throw new HubException("rate_limited");
         var contacts = (await dialogs.GetContactIdsAsync(UserId)).Where(c => !presence.IsOnline(c)).ToList();
         var rows = await db.Users.AsNoTracking().Where(u => contacts.Contains(u.Id) && u.LastSeenAt != null)
             .Select(u => new { u.Id, At = u.LastSeenAt!.Value }).ToListAsync();

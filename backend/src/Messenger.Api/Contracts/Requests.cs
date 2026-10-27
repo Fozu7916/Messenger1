@@ -11,7 +11,7 @@ public sealed class RegisterRequest
     public string Email { get; init; } = "";
 
     // bcrypt учитывает только первые 72 байта пароля
-    [Required, MinLength(8), MaxLength(72)]
+    [Required, MinLength(8), MaxUtf8Bytes(72)]
     public string Password { get; init; } = "";
 
     [MaxLength(64)]
@@ -24,7 +24,7 @@ public sealed class LoginRequest
     [Required, MaxLength(254)]
     public string Login { get; init; } = "";
 
-    [Required, MaxLength(72)]
+    [Required, MaxUtf8Bytes(72)]
     public string Password { get; init; } = "";
 }
 
@@ -33,7 +33,8 @@ public sealed class UpdateProfileRequest
     [Required, MaxLength(64)]
     public string DisplayName { get; init; } = "";
 
-    [MaxLength(2048)]    public string? AvatarUrl { get; init; }
+    [MaxLength(Messenger.Api.Contracts.AvatarUrl.MaxLength)]
+    public string? AvatarUrl { get; init; }
 }
 
 public sealed class CreateDialogRequest
@@ -46,4 +47,12 @@ public sealed class EditMessageRequest
 {
     [Required, MaxLength(4000)]
     public string Text { get; init; } = "";
+}
+
+
+/// <summary>bcrypt обрезает пароль по 72 БАЙТАМ, а MaxLength считает символы: длинный кириллический пароль молча терял хвост.</summary>
+[AttributeUsage(AttributeTargets.Property)]
+public sealed class MaxUtf8BytesAttribute(int max) : ValidationAttribute($"Пароль не длиннее {max} байт (для кириллицы и эмодзи — короче по символам)")
+{
+    public override bool IsValid(object? value) => value is not string s || System.Text.Encoding.UTF8.GetByteCount(s) <= max;
 }

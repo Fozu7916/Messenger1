@@ -66,7 +66,6 @@ export function useLiveQuery<T>(make: (db: DB) => { $: Observable<any> } | null,
 export function ChatProvider({ children }: { children: ReactNode }) {
   const { session } = useAuth();
   const me = session!.user;
-  const token = session!.token;
   const toast = useToast();
 
   const [db, setDb] = useState<DB | null>(null);
@@ -287,7 +286,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       void sync(); // REST не зависит от SignalR: интерфейс наполняется, даже если хаб недоступен
 
       hub = new HubConnectionBuilder()
-        .withUrl(`${api.BASE}/hubs/chat`, { accessTokenFactory: () => token })
+        .withUrl(`${api.BASE}/hubs/chat`, { accessTokenFactory: () => api.getToken() ?? '' })
         .withAutomaticReconnect({ nextRetryDelayInMilliseconds: (c) => Math.min(1000 * 2 ** c.previousRetryCount, 15000) })
         .build();
       hubRef.current = hub;

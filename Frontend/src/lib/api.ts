@@ -9,7 +9,31 @@ export class ApiError extends Error {
 let token: string | null = null;
 let onUnauthorized: () => void = () => {};
 export const setToken = (t: string | null) => { token = t; };
+export const getToken = () => token;
 export const setUnauthorizedHandler = (fn: () => void) => { onUnauthorized = fn; };
+let onRefreshed: (r: AuthResponse) => void = () => {};
+export const setRefreshedHandler = (fn: (r: AuthResponse) => void) => { onRefreshed = fn; };
+
+// Refresh-токен лежит в httpOnly-cookie (JS его не видит). Один запрос на всех: параллельные вкладки/запросы ждут общий результат.
+// Возвращает null, если сессия закончилась; бросает ApiError(0), если нет сети (сессию при этом не сбрасываем).
+let refreshing: Promise<AuthResponse | null> | null = null;
+export function refresh(): Promise<AuthResponse | null> {
+  refreshing ??= (async () => {
+    let res: Response;
+    try {
+      res = await fetch(`${BASE}/api/auth/refresh`, { method: 'POST', credentials: 'include', headers: { 'X-Requested-With': 'fetch' } });
+    } catch {
+      throw new ApiError(0, 'Нет соединения с сервером');
+    }
+    if (res.status === 401 || res.status === 400) return null;
+    if (!res.ok) throw new ApiError(res.status, 'Сервер недоступен, попробуйте позже');
+    const r = (await res.json()) as AuthResponse;
+    token = r.accessToken;
+    onRefreshed(r);
+    return r;
+  })().finally(() => { refreshing = null; });
+  return refreshing;
+}
 
 const FALLBACK: Record<number, string> = {
   400: 'Проверьте введённые данные', 401: 'Неверные данные или истёкшая сессия',
@@ -22,11 +46,12 @@ function problemText(status: number, data: any): string {
   return first || data?.detail || FALLBACK[status] || (status >= 500 ? 'Сервер недоступен, попробуйте позже' : 'Что-то пошло не так');
 }
 
-async function req<T>(method: string, path: string, body?: unknown): Promise<T> {
+async function req<T>(method: string, path: string, body?: unknown, retried = false): Promise<T> {
   let res: Response;
   try {
     res = await fetch(BASE + path, {
       method,
+      credentials: 'include',
       headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
       body: body === undefined ? undefined : JSON.stringify(body),
     });
@@ -36,7 +61,12 @@ async function req<T>(method: string, path: string, body?: unknown): Promise<T> 
   if (res.status === 204) return undefined as T;
   const data = await res.json().catch(() => null);
   if (!res.ok) {
-    if (res.status === 401 && token) onUnauthorized();
+    if (res.status === 401 && token && !retried && !path.startsWith('/api/auth/')) {
+      // access-токен мог истечь — тихо обновляем и повторяем запрос один раз
+      const r = await refresh().catch(() => undefined);
+      if (r) return req<T>(method, path, body, true);
+      if (r === null) onUnauthorized();
+    } else if (res.status === 401 && token && retried) onUnauthorized();
     throw new ApiError(res.status, problemText(res.status, data));
   }
   return data as T;
@@ -47,7 +77,7 @@ export const register = (v: { login: string; email: string; password: string; di
 export const login = (login: string, password: string) => req<AuthResponse>('POST', '/api/auth/login', { login, password });
 export const logout = () => req<void>('POST', '/api/auth/logout');
 export const updateMe = (v: { displayName: string; avatarUrl: string | null }) => req<User>('PUT', '/api/users/me', v);
-// Люди: без query — все пользователи по алфавиту (постранично), с query — поиск по логину и имени.
+// Люди: поиск по логину и имени, минимум 2 символа (короче — сервер вернёт пустой список).
 export const users = (p: { query?: string; offset?: number; limit?: number } = {}) => {
   const q = new URLSearchParams();
   if (p.query) q.set('query', p.query);

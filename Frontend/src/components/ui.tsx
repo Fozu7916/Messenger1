@@ -1,5 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
-import { initials } from '../lib/format';
+import { initials, isHttpUrl } from '../lib/format';
 
 const PALETTE: [string, string][] = [
   ['#7c6cff', '#3d7bff'], ['#ff8a5c', '#e0457b'], ['#22c1a3', '#2d8cf0'],
@@ -15,12 +15,14 @@ const colorOf = (s: string) => {
 export function Avatar({ name, url, online, size = 40 }: { name: string; url?: string | null; online?: boolean; size?: number }) {
   const [bad, setBad] = useState(false);
   useEffect(() => setBad(false), [url]);
+  // старые/небезопасные ссылки (http, localhost, логин в URL) не загружаем — показываем инициалы
+  const src = url && isHttpUrl(url) ? url : null;
   return (
     <div className="ava" style={{
       width: size, height: size, fontSize: size * 0.35,
-      ...(url && !bad ? {} : { background: `linear-gradient(135deg, ${colorOf(name)[0]}, ${colorOf(name)[1]})`, color: '#fff' }),
+      ...(src && !bad ? {} : { background: `linear-gradient(135deg, ${colorOf(name)[0]}, ${colorOf(name)[1]})`, color: '#fff' }),
     }}>
-      {url && !bad ? <img src={url} alt="" referrerPolicy="no-referrer" loading="lazy" decoding="async" onError={() => setBad(true)} /> : initials(name)}
+      {src && !bad ? <img src={src} alt="" referrerPolicy="no-referrer" loading="lazy" decoding="async" onError={() => setBad(true)} /> : initials(name)}
       {online !== undefined && <i className={online ? 'on' : ''} />}
     </div>
   );

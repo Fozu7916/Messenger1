@@ -34,8 +34,17 @@ namespace Messenger.Api.Data.Migrations
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("created_at");
 
+                    b.Property<string>("PairKey")
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("pair_key");
+
                     b.HasKey("Id")
                         .HasName("pk_dialogs");
+
+                    b.HasIndex("PairKey")
+                        .IsUnique()
+                        .HasDatabaseName("ix_dialogs_pair_key");
 
                     b.ToTable("dialogs", (string)null);
                 });
@@ -168,6 +177,58 @@ namespace Messenger.Api.Data.Migrations
                     b.ToTable("message_hides", (string)null);
                 });
 
+            modelBuilder.Entity("Messenger.Api.Domain.RefreshToken", b =>
+                {
+                    b.Property<string>("Id")
+                        .HasMaxLength(26)
+                        .HasColumnType("character varying(26)")
+                        .HasColumnName("id")
+                        .UseCollation("C");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<DateTime>("ExpiresAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("expires_at");
+
+                    b.Property<string>("ReplacedById")
+                        .HasMaxLength(26)
+                        .HasColumnType("character varying(26)")
+                        .HasColumnName("replaced_by_id")
+                        .UseCollation("C");
+
+                    b.Property<DateTime?>("RevokedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("revoked_at");
+
+                    b.Property<string>("TokenHash")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("token_hash");
+
+                    b.Property<string>("UserId")
+                        .IsRequired()
+                        .HasMaxLength(26)
+                        .HasColumnType("character varying(26)")
+                        .HasColumnName("user_id")
+                        .UseCollation("C");
+
+                    b.HasKey("Id")
+                        .HasName("pk_refresh_tokens");
+
+                    b.HasIndex("TokenHash")
+                        .IsUnique()
+                        .HasDatabaseName("ix_refresh_tokens_token_hash");
+
+                    b.HasIndex("UserId")
+                        .HasDatabaseName("ix_refresh_tokens_user_id");
+
+                    b.ToTable("refresh_tokens", (string)null);
+                });
+
             modelBuilder.Entity("Messenger.Api.Domain.User", b =>
                 {
                     b.Property<string>("Id")
@@ -284,6 +345,16 @@ namespace Messenger.Api.Data.Migrations
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired()
                         .HasConstraintName("fk_message_hides_users_user_id");
+                });
+
+            modelBuilder.Entity("Messenger.Api.Domain.RefreshToken", b =>
+                {
+                    b.HasOne("Messenger.Api.Domain.User", null)
+                        .WithMany()
+                        .HasForeignKey("UserId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired()
+                        .HasConstraintName("fk_refresh_tokens_users_user_id");
                 });
 
             modelBuilder.Entity("Messenger.Api.Domain.Dialog", b =>

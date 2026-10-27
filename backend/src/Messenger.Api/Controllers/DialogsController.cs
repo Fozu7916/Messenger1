@@ -73,9 +73,11 @@ public sealed class DialogsController(AppDbContext db, IMessageRepository messag
             return Ok(new DialogDto(existing.Id, existing.CreatedAt, peer, null));
 
         var now = DateTime.UtcNow;
+        var pairKey = string.CompareOrdinal(me, req.UserId) < 0 ? $"{me}:{req.UserId}" : $"{req.UserId}:{me}";
         var dialog = new Dialog
         {
             CreatedAt = now,
+            PairKey = pairKey,
             Members =
             {
                 new DialogMember { UserId = me, JoinedAt = now },
@@ -83,7 +85,17 @@ public sealed class DialogsController(AppDbContext db, IMessageRepository messag
             },
         };
         db.Dialogs.Add(dialog);
-        await db.SaveChangesAsync(ct);
+        try
+        {
+            await db.SaveChangesAsync(ct);
+        }
+        catch (DbUpdateException ex) when (ex.InnerException is Npgsql.PostgresException { SqlState: Npgsql.PostgresErrorCodes.UniqueViolation })
+        {
+            // Параллельный запрос уже создал диалог этой пары — возвращаем его.
+            db.ChangeTracker.Clear();
+            var race = await db.Dialogs.AsNoTracking().FirstAsync(d => d.PairKey == pairKey, ct);
+            return Ok(new DialogDto(race.Id, race.CreatedAt, peer, null));
+        }
 
         return Created($"/api/dialogs/{dialog.Id}", new DialogDto(dialog.Id, dialog.CreatedAt, peer, null));
     }

@@ -33,7 +33,6 @@ const checkPass = (v: string) =>
 
 export function AuthPage() {
   const { login, register } = useAuth();
-
   const [mode, setMode] = useState<'login' | 'register'>('login');
   const [err, setErr] = useState('');
   const [busy, setBusy] = useState(false);
@@ -79,6 +78,7 @@ export function AuthPage() {
     setTouched({});
   };
 
+  // Валидация идёт на клиенте до отправки (noValidate + preventDefault) — менеджер паролей не видит невалидные данные.
   const submit = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
 
@@ -139,7 +139,6 @@ export function AuthPage() {
       <div className="hero">
         <div>
           <h1>Безопасность превыше всего</h1>
-
           <ul>
             {POINTS.map((t) => (
               <li key={t}>
@@ -152,149 +151,33 @@ export function AuthPage() {
               </li>
             ))}
           </ul>
-
           <div className="preview" aria-hidden="true">
             <div className="msg in">Привет! Ты уже в сети?</div>
             <div className="msg out">Да, вечером в доту?</div>
-            <div className="msg in">
-              Сёдня не, у мя идз просрочено
-            </div>
+            <div className="msg in">Сёдня не, у мя идз просрочено</div>
           </div>
         </div>
-
-        <form
-          className="card"
-          onSubmit={submit}
-          noValidate
-          key={mode}
-          autoComplete={reg ? 'off' : undefined}
-        >
+        <form className="card" onSubmit={submit} noValidate key={mode}>
           <div className="tabs" role="tablist">
-            <button
-              type="button"
-              role="tab"
-              className="ghost"
-              aria-selected={!reg}
-              onClick={() => switchMode('login')}
-            >
-              Вход
-            </button>
-
-            <button
-              type="button"
-              role="tab"
-              className="ghost"
-              aria-selected={reg}
-              onClick={() => switchMode('register')}
-            >
-              Регистрация
-            </button>
+            <button type="button" role="tab" className="ghost" aria-selected={!reg} onClick={() => switchMode('login')}>Вход</button>
+            <button type="button" role="tab" className="ghost" aria-selected={reg} onClick={() => switchMode('register')}>Регистрация</button>
           </div>
-
           <h2>{reg ? 'Создайте аккаунт' : 'С возвращением'}</h2>
-
-          <p className="sub">{reg ? '' : ''}</p>
-
+          <p className="sub">{reg ? 'Займёт меньше минуты.' : 'Войдите по логину или email.'}</p>
           <div className="form">
-            {reg &&
-              field(
-                'login',
-                <input
-                  className="field"
-                  name="register-login"
-                  type="text"
-                  placeholder="Логин"
-                  autoComplete="off"
-                  maxLength={32}
-                  value={v.login}
-                  onChange={set('login')}
-                  onBlur={blur('login')}
-                  aria-invalid={!!show('login')}
-                />,
-                '3–32 символа: латиница, цифры, _',
-              )}
-
-            {reg
-              ? field(
-                  'email',
-                  <input
-                    className="field"
-                    name="signup-email-input"
-                    type="email"
-                    inputMode="email"
-                    placeholder="Email"
-                    autoComplete="off"
-                    autoCapitalize="none"
-                    spellCheck={false}
-                    value={v.email}
-                    onChange={set('email')}
-                    onBlur={blur('email')}
-                    aria-invalid={!!show('email')}
-                    aria-describedby={
-                      show('email') ? 'email-e' : undefined
-                    }
-                  />,
-                )
-              : field(
-                  'id',
-                  <input
-                    className="field"
-                    name="login-id"
-                    type="text"
-                    placeholder="Логин или email"
-                    autoComplete="username"
-                    value={v.id}
-                    onChange={set('id')}
-                    onBlur={blur('id')}
-                    aria-invalid={!!show('id')}
-                  />,
-                )}
-
-            {field(
-              'password',
-              <input
-                className="field"
-                name={reg ? 'signup-password' : 'login-password'}
-                type="password"
-                maxLength={72}
-                placeholder="Пароль"
-                autoComplete={
-                  reg ? 'off' : 'current-password'
-                }
-                value={v.password}
-                onChange={set('password')}
-                onBlur={blur('password')}
-                aria-invalid={!!show('password')}
-              />,
-              reg ? PASS_HINT : undefined,
-            )}
-
-            {reg && (
-              <input
-                className="field"
-                name="displayName"
-                type="text"
-                placeholder="Имя (необязательно)"
-                autoComplete="off"
-                maxLength={64}
-                value={v.name}
-                onChange={set('name')}
-              />
-            )}
-
-            {err && (
-              <div className="err" role="alert">
-                {err}
-              </div>
-            )}
-
-            <button className="btn big" disabled={busy}>
-              {busy
-                ? 'Подождите…'
-                : reg
-                  ? 'Зарегистрироваться'
-                  : 'Войти'}
-            </button>
+            {reg && field('login',
+              <input className="field" name="login" placeholder="Логин" autoComplete="username" maxLength={32} value={v.login} onChange={set('login')} onBlur={blur('login')} aria-invalid={!!show('login')} />,
+              '3–32 символа: латиница, цифры, _')}
+            {reg ? field('email',
+              <input className="field" name="email" type="email" inputMode="email" placeholder="Email" autoComplete="email" value={v.email} onChange={set('email')} onBlur={blur('email')} aria-invalid={!!show('email')} aria-describedby="email-e" />)
+              : field('id',
+              <input className="field" name="login" placeholder="Логин или email" autoComplete="username" value={v.id} onChange={set('id')} onBlur={blur('id')} aria-invalid={!!show('id')} />)}
+            {field('password',
+              <input className="field" name="password" type="password" maxLength={72} placeholder="Пароль" autoComplete={reg ? 'new-password' : 'current-password'} value={v.password} onChange={set('password')} onBlur={blur('password')} aria-invalid={!!show('password')} />,
+              reg ? PASS_HINT : undefined)}
+            {reg && <input className="field" name="displayName" placeholder="Имя (необязательно)" autoComplete="nickname" maxLength={64} value={v.name} onChange={set('name')} />}
+            {err && <div className="err" role="alert">{err}</div>}
+            <button className="btn big" disabled={busy}>{busy ? 'Подождите…' : reg ? 'Зарегистрироваться' : 'Войти'}</button>
           </div>
         </form>
       </div>
