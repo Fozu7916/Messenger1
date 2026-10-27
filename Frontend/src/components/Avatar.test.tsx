@@ -33,7 +33,7 @@ describe('Avatar: единая форма', () => {
 
   it('фото безопасно: без referrer, ленивая загрузка', () => {
     const out = html({ name: 'A', url: 'https://example.com/a.png' });
-    expect(out).toContain('referrerPolicy="no-referrer"'.replace('referrerPolicy', 'referrerpolicy'));
+    expect(out).toContain('referrerPolicy="no-referrer"');
     expect(out).toContain('loading="lazy"');
   });
 
