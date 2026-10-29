@@ -3,8 +3,13 @@ import { useState, type FormEvent, type ReactNode } from 'react';
 import { useAuth } from '../lib/auth';
 import { Icon } from './ui';
 
-const EMAIL_RE = /^[^\s@]+@[^\s@.]+(?:\.[^\s@.]+)*\.[A-Za-z]{2,}$/;
-const LOGIN_RE = /^[a-zA-Z0-9_]{3,32}$/;
+const POINTS = [
+  'Сообщения приходят мгновенно',
+  'История всегда под рукой',
+  'Доступ к диалогу — только у участников',
+];
+
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const PASS_HINT = 'От 8 до 72 символов';
 
 const checkEmail = (v: string) =>
@@ -13,6 +18,8 @@ const checkEmail = (v: string) =>
     : EMAIL_RE.test(v.trim())
       ? ''
       : 'Введите корректный email, например name@example.com';
+
+const LOGIN_RE = /^[a-zA-Z0-9_]{3,32}$/;
 
 const checkLogin = (v: string) =>
   LOGIN_RE.test(v.trim())
@@ -51,6 +58,29 @@ export function AuthPage() {
     id: !reg && !v.id.trim() ? 'Введите логин или email' : '',
   };
 
+  const hasErrors = reg
+    ? !!(errors.login || errors.email || errors.password)
+    : !!(errors.id || !v.password);
+
+  const show = (k: keyof typeof errors) =>
+    touched[k] ? errors[k] : '';
+
+  const set =
+    (k: keyof typeof v) =>
+    (e: { target: { value: string } }) => {
+      setV({ ...v, [k]: e.target.value });
+      setErr('');
+    };
+
+  const blur = (k: string) => () =>
+    setTouched((t) => ({ ...t, [k]: true }));
+
+  const switchMode = (m: 'login' | 'register') => {
+    setMode(m);
+    setErr('');
+    setTouched({});
+  };
+
   // При входе длину пароля не проверяем — достаточно, чтобы он был введён (решает сервер).
   const hasErrors = reg
     ? !!(errors.login || errors.email || errors.password)
@@ -85,7 +115,7 @@ export function AuthPage() {
       id: true,
     });
 
-    if (hasErrors || busy) return;
+    if (hasErrors) return;
 
     setBusy(true);
     setErr('');
@@ -93,73 +123,88 @@ export function AuthPage() {
     try {
       if (reg) {
         await register({
-          login: v.login.trim(),
-          email: v.email.trim(),
+          login: v.login,
+          email: v.email,
           password: v.password,
           displayName: v.name.trim() || undefined,
         });
       } else {
-        await login(v.id.trim(), v.password);
+        await login(v.id, v.password);
       }
     } catch (x) {
-      setErr(
-        x instanceof Error
-          ? x.message
-          : 'Произошла ошибка. Попробуйте ещё раз.',
-      );
+      setErr((x as Error).message);
     } finally {
       setBusy(false);
     }
   };
 
-  const field = (k: keyof typeof errors, label: string, input: ReactNode, hint?: string) => (
-    <label className="lbl fld">
-      {label}
+  const field = (
+    k: keyof typeof errors,
+    input: ReactNode,
+    hint?: string,
+  ) => (
+    <div className="fld">
       {input}
-      {show(k) ? <span className="err" id={`${k}-e`} role="alert">{show(k)}</span> : hint ? <span className="hint">{hint}</span> : null}
-    </label>
+
+      {show(k) ? (
+        <div className="err" id={`${k}-e`} role="alert">
+          {show(k)}
+        </div>
+      ) : hint ? (
+        <p className="hint">{hint}</p>
+      ) : null}
+    </div>
   );
   const aria = (k: keyof typeof errors) => ({ 'aria-invalid': !!show(k), 'aria-describedby': show(k) ? `${k}-e` : undefined });
 
   return (
-    <main className="auth">
-      <div className="auth-box">
-        <div className="brand"><span className="brand-mark"><Icon.Chat /></span>Мессенджер</div>
-        <form className="auth-card" onSubmit={submit} noValidate key={mode} autoComplete="on">
-          <div className="seg" role="tablist">
-            <button type="button" role="tab" aria-selected={!reg} onClick={() => switchMode('login')}>Вход</button>
-            <button type="button" role="tab" aria-selected={reg} onClick={() => switchMode('register')}>Регистрация</button>
+    <div className="auth">
+      <div className="banner">
+        Личная переписка без установки приложений
+      </div>
+
+      <div className="hero">
+        <div>
+          <h1>Безопасность превыше всего</h1>
+          <ul>
+            {POINTS.map((t) => (
+              <li key={t}>
+                <b>
+                  <svg viewBox="0 0 12 12">
+                    <path d="M2 6.5l2.6 2.6L10 3.5" />
+                  </svg>
+                </b>
+                {t}
+              </li>
+            ))}
+          </ul>
+          <div className="preview" aria-hidden="true">
+            <div className="msg in">Привет! Ты уже в сети?</div>
+            <div className="msg out">Да, вечером в доту?</div>
+            <div className="msg in">Сёдня не, у мя идз просрочено</div>
           </div>
-          <h2>{reg ? 'Создать аккаунт' : 'С возвращением'}</h2>
-          <p className="lead">{reg ? 'Пара полей — и можно переписываться.' : 'Войдите по логину или email.'}</p>
+        </div>
+        <form className="card" onSubmit={submit} noValidate key={mode}>
+          <div className="tabs" role="tablist">
+            <button type="button" role="tab" className="ghost" aria-selected={!reg} onClick={() => switchMode('login')}>Вход</button>
+            <button type="button" role="tab" className="ghost" aria-selected={reg} onClick={() => switchMode('register')}>Регистрация</button>
+          </div>
+          <h2>{reg ? 'Создайте аккаунт' : 'С возвращением'}</h2>
+          <p className="sub">{reg ? 'Займёт меньше минуты.' : 'Войдите по логину или email.'}</p>
           <div className="form">
-            {reg && field('login', 'Логин',
-              <input className="field" name="username" autoComplete="username" maxLength={32}
-                value={v.login} onChange={set('login')} onBlur={blur('login')} {...aria('login')} />,
-              'Латиница, цифры и _, от 3 до 32 символов')}
-            {reg
-              ? field('email', 'Email',
-                <input className="field" name="email" type="email" inputMode="email" autoComplete="email" maxLength={254}
-                  value={v.email} onChange={set('email')} onBlur={blur('email')} {...aria('email')} />,
-                'Например, name@example.com')
-              : field('id', 'Логин или email',
-                <input className="field" name="username" autoComplete="username" autoFocus
-                  value={v.id} onChange={set('id')} onBlur={blur('id')} {...aria('id')} />)}
-            {field('password', 'Пароль',
-              <input className="field" name="password" type="password" maxLength={72}
-                autoComplete={reg ? 'new-password' : 'current-password'}
-                value={v.password} onChange={set('password')} onBlur={blur('password')} {...aria('password')} />,
+            {reg && field('login',
+              <input className="field" name="login" placeholder="Логин" autoComplete="username" maxLength={32} value={v.login} onChange={set('login')} onBlur={blur('login')} aria-invalid={!!show('login')} />,
+              '3–32 символа: латиница, цифры, _')}
+            {reg ? field('email',
+              <input className="field" name="email" type="email" inputMode="email" placeholder="Email" autoComplete="email" value={v.email} onChange={set('email')} onBlur={blur('email')} aria-invalid={!!show('email')} aria-describedby="email-e" />)
+              : field('id',
+              <input className="field" name="login" placeholder="Логин или email" autoComplete="username" value={v.id} onChange={set('id')} onBlur={blur('id')} aria-invalid={!!show('id')} />)}
+            {field('password',
+              <input className="field" name="password" type="password" maxLength={72} placeholder="Пароль" autoComplete={reg ? 'new-password' : 'current-password'} value={v.password} onChange={set('password')} onBlur={blur('password')} aria-invalid={!!show('password')} />,
               reg ? PASS_HINT : undefined)}
-            {reg && (
-              <label className="lbl fld">
-                <span>Имя <span style={{ fontWeight: 400 }}>· необязательно</span></span>
-                <input className="field" name="displayName" autoComplete="nickname" maxLength={64} value={v.name} onChange={set('name')} />
-              </label>
-            )}
-            {err && <p className="err" role="alert">{err}</p>}
-            <button className="btn block" type="submit" disabled={busy}>
-              {busy ? 'Подождите…' : reg ? 'Зарегистрироваться' : 'Войти'}
-            </button>
+            {reg && <input className="field" name="displayName" placeholder="Имя (необязательно)" autoComplete="nickname" maxLength={64} value={v.name} onChange={set('name')} />}
+            {err && <div className="err" role="alert">{err}</div>}
+            <button className="btn big" disabled={busy}>{busy ? 'Подождите…' : reg ? 'Зарегистрироваться' : 'Войти'}</button>
           </div>
         </form>
         <p className="auth-foot">Переписка доступна только её участникам.</p>

@@ -1,5 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
-import { initials } from '../lib/format';
+import { initials, isHttpUrl } from '../lib/format';
 
 // Оттенки серого: читаются и на светлой, и на тёмной теме
 const PALETTE = ['#3f3f46', '#52525b', '#71717a', '#57534e', '#78716c', '#4b5563', '#6b7280', '#44403c'];
@@ -13,10 +13,14 @@ const colorOf = (s: string) => {
 export function Avatar({ name, url, online, size = 40 }: { name: string; url?: string | null; online?: boolean; size?: number }) {
   const [bad, setBad] = useState(false);
   useEffect(() => setBad(false), [url]);
-  const img = !!url && !bad;
+  // старые/небезопасные ссылки (http, localhost, логин в URL) не загружаем — показываем инициалы
+  const src = url && isHttpUrl(url) ? url : null;
   return (
-    <div className="ava" style={{ width: size, height: size, fontSize: Math.round(size * 0.38), background: img ? 'var(--bg-3)' : colorOf(name) }}>
-      {img ? <img src={url!} alt="" referrerPolicy="no-referrer" loading="lazy" decoding="async" onError={() => setBad(true)} /> : initials(name)}
+    <div className="ava" style={{
+      width: size, height: size, fontSize: size * 0.35,
+      ...(src && !bad ? {} : { background: `linear-gradient(135deg, ${colorOf(name)[0]}, ${colorOf(name)[1]})`, color: '#fff' }),
+    }}>
+      {src && !bad ? <img src={src} alt="" referrerPolicy="no-referrer" loading="lazy" decoding="async" onError={() => setBad(true)} /> : initials(name)}
       {online !== undefined && <i className={online ? 'on' : ''} />}
     </div>
   );

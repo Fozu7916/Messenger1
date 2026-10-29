@@ -27,6 +27,7 @@ public sealed class ApiFactory : WebApplicationFactory<Program>, IAsyncLifetime
         builder.UseSetting("Jwt:Key", "test-key-test-key-test-key-test-key-1234");
         builder.UseSetting("Database:AutoMigrate", "true");
         builder.UseSetting("RateLimiting:AuthPerMinute", "100000");
+        builder.UseSetting("Auth:RefreshGraceSeconds", "0");
     }
 }
 

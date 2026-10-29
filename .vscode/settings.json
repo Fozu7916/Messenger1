@@ -3,6 +3,10 @@
     "**/bin": true,
     "**/obj": true,
     "**/*.csproj": true,
-    "**/.vs": true
+    "**/.vs": true,
+
+    "scm.diffDecorations": true,
+    "diffEditor.renderSideBySide": false,
+    "scm.diffDecorationsGutterWidth": 5
   }
 }

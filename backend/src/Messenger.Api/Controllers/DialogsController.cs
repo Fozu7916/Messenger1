@@ -78,9 +78,11 @@ public sealed class DialogsController(AppDbContext db, IMessageRepository messag
             return Ok(new DialogDto(existing.Id, existing.CreatedAt, peer, null));
 
         var now = DateTime.UtcNow;
+        var pairKey = string.CompareOrdinal(me, req.UserId) < 0 ? $"{me}:{req.UserId}" : $"{req.UserId}:{me}";
         var dialog = new Dialog
         {
             CreatedAt = now,
+            PairKey = pairKey,
             Members =
             {
                 new DialogMember { UserId = me, JoinedAt = now },

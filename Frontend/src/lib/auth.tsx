@@ -4,6 +4,7 @@ import { wipeDb } from './db';
 import { clearUiState } from './persist';
 import type { AuthResponse, User } from '../types';
 
+// token пустой, пока нет сети после запуска: интерфейс открывается из локальной базы, токен подтянется при первом обновлении.
 interface Session { token: string; expiresAt: string; user: User }
 interface Auth {
   session: Session | null;
@@ -14,63 +15,71 @@ interface Auth {
 }
 const Ctx = createContext<Auth>(null as unknown as Auth);
 export const useAuth = () => useContext(Ctx);
-const KEY = 'session';
-// Продлеваем сессию заранее: за 5 минут до истечения (или на середине срока, если он короче 10 минут).
-const REFRESH_LEAD_MS = 5 * 60_000;
-const RETRY_MS = 30_000;
 
-function read(): Session | null {
-  try {
-    const s = JSON.parse(localStorage.getItem(KEY) || 'null') as Session | null;
-    return s && Date.parse(s.expiresAt) > Date.now() ? s : null;
-  } catch { return null; }
-}
+// В localStorage — только профиль (чтобы понять, что пользователь входил и открыть интерфейс офлайн).
+// Токены там не хранятся: access живёт в памяти, refresh — в httpOnly-cookie.
+const KEY = 'session:user';
+const readUser = (): User | null => { try { return JSON.parse(localStorage.getItem(KEY) || 'null') as User | null; } catch { return null; } };
+const REFRESH_AHEAD_MS = 60_000;
+const RETRY_MS = 15_000;
 
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const [session, setSession] = useState<Session | null>(() => { const s = read(); api.setToken(s?.token ?? null); return s; });
-  const sessionRef = useRef(session);
+  const [session, setSession] = useState<Session | null>(null);
+  const [ready, setReady] = useState(false);
 
   const store = useCallback((s: Session | null) => {
-    api.setToken(s?.token ?? null);
-    try { s ? localStorage.setItem(KEY, JSON.stringify(s)) : localStorage.removeItem(KEY); } catch { /* ignore */ }
-    sessionRef.current = s;
+    api.setToken(s?.token || null);
+    try { s ? localStorage.setItem(KEY, JSON.stringify(s.user)) : localStorage.removeItem(KEY); } catch { /* ignore */ }
     setSession(s);
   }, []);
   const fromResponse = useCallback((r: AuthResponse) => store({ token: r.accessToken, expiresAt: r.expiresAt, user: r.user }), [store]);
-  const expire = useCallback(() => { store(null); clearUiState(); }, [store]);
+  const drop = useCallback(() => { store(null); clearUiState(); }, [store]);
 
-  useEffect(() => { api.setUnauthorizedHandler(expire); }, [expire]);
+  useEffect(() => { api.setUnauthorizedHandler(drop); api.setRefreshedHandler((r) => setSession({ token: r.accessToken, expiresAt: r.expiresAt, user: r.user })); }, [drop]);
 
-  // Скользящая сессия: пока вкладка открыта, токен продлевается и пользователя не выкидывает на экран входа.
+  // Запуск: если пользователь входил раньше — пробуем восстановить сессию по cookie.
+  useEffect(() => {
+    let dead = false;
+    (async () => {
+      const user = readUser();
+      if (user) {
+        try {
+          const r = await api.refresh();
+          if (!dead) r ? fromResponse(r) : drop();
+        } catch {
+          // нет сети: открываем интерфейс из локальной базы, обновление повторит таймер ниже
+          if (!dead) { setSession({ token: '', expiresAt: new Date(0).toISOString(), user }); }
+        }
+      }
+      if (!dead) setReady(true);
+    })();
+    return () => { dead = true; };
+  }, [fromResponse, drop]);
+
+  // Обновляем токен заранее; если сети нет — повторяем.
   useEffect(() => {
     if (!session) return;
-    const exp = Date.parse(session.expiresAt);
-    const life = exp - Date.now();
-    let timer = 0;
-    const attempt = async () => {
-      try { fromResponse(await api.refresh()); }
-      catch (e) {
-        // 401 уже обработан (expire); сеть недоступна — пробуем ещё, пока токен жив
-        if (e instanceof api.ApiError && e.status === 401) return;
-        if (Date.now() + RETRY_MS < exp) timer = window.setTimeout(attempt, RETRY_MS);
-        else timer = window.setTimeout(expire, Math.max(0, exp - Date.now()));
-      }
+    let dead = false;
+    let timer: ReturnType<typeof setTimeout>;
+    const schedule = (ms: number) => { timer = setTimeout(run, Math.max(0, ms)); };
+    const run = async () => {
+      try {
+        const r = await api.refresh();
+        if (dead) return;
+        if (r === null) drop();   // сессия закончилась на сервере
+      } catch { if (!dead) schedule(RETRY_MS); }
     };
-    timer = window.setTimeout(attempt, Math.max(0, life > 2 * REFRESH_LEAD_MS ? life - REFRESH_LEAD_MS : life / 2));
-    return () => clearTimeout(timer);
-  }, [session?.token]);
+    schedule(Date.parse(session.expiresAt) - Date.now() - REFRESH_AHEAD_MS);
+    return () => { dead = true; clearTimeout(timer); };
+  }, [session?.expiresAt, drop]);
 
   const value: Auth = {
     session,
     login: async (l, p) => fromResponse(await api.login(l.trim(), p)),
     register: async (v) => fromResponse(await api.register({ ...v, login: v.login.trim(), email: v.email.trim() })),
-    logout: () => {
-      const uid = sessionRef.current?.user.id;
-      api.logout().catch(() => {});
-      expire();
-      if (uid) void wipeDb(uid);
-    },
-    updateProfile: async (v) => { const user = await api.updateMe(v); store({ ...sessionRef.current!, user }); },
+    logout: () => { api.logout().catch(() => {}); drop(); },
+    updateProfile: async (v) => { const user = await api.updateMe(v); store({ ...session!, user }); },
   };
+  if (!ready) return null;
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }
