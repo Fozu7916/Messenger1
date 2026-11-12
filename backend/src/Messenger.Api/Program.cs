@@ -147,8 +147,8 @@ app.Use(async (ctx, next) =>
     h["Referrer-Policy"] = "no-referrer";
     h["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()";
     // img-src https: — аватары по внешним ссылкам; connect-src — свой origin и wss плюс Csp:ConnectSrc (если API на другом домене).
-    h["Content-Security-Policy"] = "default-src 'self'; img-src 'self' https: data:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; " +
-        "font-src 'self' https://fonts.gstatic.com; script-src 'self'; connect-src " + connectSrc + "; frame-ancestors 'none'; base-uri 'self'; object-src 'none'";
+    h["Content-Security-Policy"] = "default-src 'self'; img-src 'self' https: data: blob:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; " +
+    "font-src 'self' https://fonts.gstatic.com; script-src 'self'; connect-src " + connectSrc + "; frame-ancestors 'none'; base-uri 'self'; object-src 'none'";
     await next();
 });
 if (!app.Environment.IsDevelopment()) app.UseHsts();
