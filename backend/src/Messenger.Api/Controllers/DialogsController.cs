@@ -5,11 +5,12 @@ using Messenger.Api.Domain;
 using Messenger.Api.Messages;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
 
 namespace Messenger.Api.Controllers;
 
-[ApiController, Route("api/dialogs"), Authorize]
+[ApiController, Route("api/dialogs"), Authorize, EnableRateLimiting("users")]
 public sealed class DialogsController(AppDbContext db, IMessageRepository messages) : ControllerBase
 {
     [HttpGet]
@@ -29,7 +30,7 @@ public sealed class DialogsController(AppDbContext db, IMessageRepository messag
                 PeerRead = d.Members.Where(m => m.UserId != me).Select(m => m.LastReadId).FirstOrDefault(),
                 Last = d.Messages.Where(m => m.DeletedAt == null && !db.MessageHides.Any(h => h.MessageId == m.Id && h.UserId == me))
                     .OrderByDescending(m => m.Id)
-                    .Select(m => new { m.Id, m.ClientMessageId, m.DialogId, m.SenderId, m.Text, m.MediaUrl, m.CreatedAt, m.EditedAt })
+                    .Select(m => new { m.Id, m.ClientMessageId, m.DialogId, m.SenderId, m.Text, m.MediaUrl, m.CreatedAt, m.EditedAt, m.ReplyToId, m.ForwardedFromId, m.ForwardedFromName })
                     .FirstOrDefault(),
             })
             .ToListAsync(ct);
@@ -42,7 +43,8 @@ public sealed class DialogsController(AppDbContext db, IMessageRepository messag
                 r.CreatedAt,
                 r.Peer is null ? null : new UserDto(r.Peer.Id, r.Peer.Login, r.Peer.DisplayName, r.Peer.AvatarUrl),
                 r.Last is null ? null : new MessageDto(r.Last.Id, r.Last.ClientMessageId, r.Last.DialogId,
-                    r.Last.SenderId, r.Last.Text, r.Last.MediaUrl, r.Last.CreatedAt, r.Last.EditedAt),
+                    r.Last.SenderId, r.Last.Text, r.Last.MediaUrl, r.Last.CreatedAt, r.Last.EditedAt,
+                    r.Last.ReplyToId, r.Last.ForwardedFromId, r.Last.ForwardedFromName),
                 unread.TryGetValue(r.Id, out var n) ? n : 0,
                 r.PeerRead))
             .OrderByDescending(d => d.LastMessage?.CreatedAt ?? d.CreatedAt)
@@ -51,7 +53,6 @@ public sealed class DialogsController(AppDbContext db, IMessageRepository messag
 
     /// <summary>
     /// Создаёт личный диалог. Если диалог с этим пользователем уже есть — возвращает его (200).
-    /// TODO: при параллельных запросах возможен дубль; закрыть уникальным ключом пары участников.
     /// </summary>
     [HttpPost]
     public async Task<ActionResult<DialogDto>> Create(CreateDialogRequest req, CancellationToken ct)

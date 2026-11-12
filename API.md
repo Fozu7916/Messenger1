@@ -43,6 +43,21 @@ interface Message {
   text: string;
   mediaUrl: string | null;
   createdAt: string;
+  editedAt: string | null;
+  replyToId: string | null;          // ответ на сообщение этого же диалога
+  forwardedFromId: string | null;    // автор оригинала, если сообщение переслано
+  forwardedFromName: string | null;  // его имя на момент пересылки
+}
+
+interface Profile {                  // GET/PUT /api/users/me, GET /api/users/{id}
+  id: string;
+  login: string;
+  displayName: string;
+  avatarUrl: string | null;
+  bio: string | null;
+  createdAt: string;
+  isOnline?: boolean | null;         // только для собеседников (есть общий диалог), иначе null
+  lastSeenAt?: string | null;        // то же; заполнено, если isOnline = false
 }
 
 interface Dialog {
@@ -86,12 +101,29 @@ POST /api/auth/logout        → 204
 ### Профиль и поиск
 
 ```http
-GET  /api/users/me           → User
-PUT  /api/users/me           { "displayName": "Alice A.", "avatarUrl": "https://example.com/a.png" }   → User
-GET  /api/users?query=bo     → User[]
+GET  /api/users/me           → Profile
+PUT  /api/users/me           { "displayName": "Alice A.", "avatarUrl": "https://example.com/a.png", "bio": "О себе" }   → Profile
+GET  /api/users/{id}         → Profile   (чужой профиль; 404, если нет такого пользователя)
+POST /api/auth/password      { "currentPassword": "...", "newPassword": "..." }   → 204
 ```
 
-`avatarUrl` — только `http`/`https` или `null`. Поиск — по префиксу логина или имени, от 2 символов, не больше 20 результатов, себя в выдаче нет.
+- `avatarUrl` — только публичный `https` или `null` (пусто — убрать аватар).
+- `bio` — до 300 символов. **`null`/поле не передано — не менять**, `""` — очистить. Старые клиенты, не знающие про `bio`, ничего не теряют.
+- `isOnline`/`lastSeenAt` в чужом профиле видны только тем, у кого с этим человеком есть общий диалог.
+- Смена пароля: неверный текущий — `400` (не `401`, чтобы клиент не разлогинил пользователя), все **остальные** сессии отзываются, текущая остаётся. Повторные ошибки блокируются так же, как при входе (`429` + `Retry-After`).
+
+### Поиск людей и поиск сообщений — это разные запросы
+
+```http
+GET /api/users/search?q=пет ив&scope=all&limit=20&offset=0   → User[]
+GET /api/messages/search?q=молоко хлеб&dialogId=...&before=...   → Message[]
+GET /api/users?query=bo      → User[]   (список «Люди»: без query — все по алфавиту; с query — как /search)
+```
+
+Поиск **по частям**: запрос делится на слова (до 5), каждое должно встретиться, в любом порядке и в любом месте, без учёта регистра; `%` и `_` — обычные символы.
+
+- `/api/users/search`: слова ищутся в логине и имени, ведущий `@` игнорируется. Сначала те, у кого логин/имя **начинается** с первого слова. `scope=all` (по умолчанию) — все люди, `q` обязателен; `scope=contacts` — только те, с кем уже есть диалог (`q` можно опустить). Себя в выдаче нет. `limit` 1–100, по умолчанию 20.
+- `/api/messages/search`: слова ищутся в тексте сообщений во всех своих диалогах или в одном (`dialogId`). Минимум 2 символа, от новых к старым, следующая страница — `before=<id последнего>`. `limit` 1–50, по умолчанию 30. Удалённые и скрытые у вас сообщения не находятся.
 
 ### Диалоги
 
@@ -122,13 +154,34 @@ GET /api/dialogs/{dialogId}/messages?after={ULID}&limit=100
 
 `after` и `before` одновременно — `400`. Если в `after` пришла полная страница (`limit` штук), запрашивайте дальше, пока не вернётся меньше `limit`.
 
-### Удаление сообщения
+### Редактирование и удаление сообщения
 
 ```http
-DELETE /api/messages/{id}    → 204
+PUT    /api/messages/{id}              { "text": "..." }   → Message   (только своё; 1–4000 символов)
+DELETE /api/messages/{id}?scope=all    → 204   (по умолчанию: у обоих)
+DELETE /api/messages/{id}?scope=me     → 204   (скрыть только у себя)
 ```
 
-Только своё сообщение; чужое или несуществующее — `404`. Остальным участникам уходит событие `MessageDeleted`.
+Удалять может любой участник диалога (как в Telegram). Чужое или несуществующее — `404`. Событие: `MessageEdited` / `MessageDeleted`. Удаление у обоих заодно открепляет сообщение.
+
+### Закреплённые сообщения
+
+```http
+GET    /api/dialogs/{dialogId}/pins               → Message[]   (сначала закреплённые позже)
+PUT    /api/dialogs/{dialogId}/pins/{messageId}   → 204   (повтор — no-op; максимум 10 на диалог, иначе 409)
+DELETE /api/dialogs/{dialogId}/pins/{messageId}   → 204
+```
+
+Закреп общий для обоих участников, закрепить может любой из них. Не участник диалога — `404`. События: `MessagePinned`, `MessageUnpinned`.
+
+### Пересылка
+
+```http
+POST /api/dialogs/{dialogId}/forward
+{ "toDialogId": "...", "messageIds": ["..."], "clientBatchId": "uuid" }   → Message[]
+```
+
+До 50 сообщений из `dialogId` в `toDialogId`; оба диалога должны быть вашими, иначе `404`. Копии получают `forwardedFromId`/`forwardedFromName` исходного автора (при повторной пересылке остаётся первый автор) и порядок оригинала. `clientBatchId` (до 40 символов) делает запрос идемпотентным: повтор вернёт те же сообщения и не создаст копий. Получатели видят обычное `MessageReceived`.
 
 ## SignalR Hub
 
@@ -162,9 +215,10 @@ await connection.start();
 | Метод | Аргументы | Возвращает | Назначение |
 |-------|-----------|------------|------------|
 | `SendMessage` | `clientMessageId: string`, `dialogId: string`, `text: string` | `string` — серверный ULID | Отправить сообщение |
+| `SendReply` | `clientMessageId`, `dialogId`, `text`, `replyToId: string` | `string` — серверный ULID | Отправить ответ на сообщение этого же диалога |
 | `Typing` | `dialogId: string` | — | Сообщить, что пользователь печатает |
 
-Ограничения `SendMessage`: `clientMessageId` — до 64 символов (удобно `crypto.randomUUID()`), `text` — 1–4000 символов после обрезки пробелов.
+Ограничения `SendMessage` и `SendReply`: `clientMessageId` — до 64 символов (удобно `crypto.randomUUID()`), `text` — 1–4000 символов после обрезки пробелов.
 
 ```ts
 const serverUlid = await connection.invoke<string>(
@@ -172,7 +226,7 @@ const serverUlid = await connection.invoke<string>(
 );
 ```
 
-`Typing` не чаще раза в 2–3 секунды: ограничения на стороне сервера пока нет.
+`Typing` сервер пропускает не чаще раза в секунду (лишние вызовы молча игнорируются).
 
 ### События сервер → клиент
 
@@ -180,7 +234,10 @@ const serverUlid = await connection.invoke<string>(
 |---------|-----------|---------------|
 | `MessageReceived` | `Message` | Всем участникам диалога, **включая отправителя** (его другие вкладки и устройства) |
 | `MessageAcked` | `clientMessageId`, `serverUlid` | Только соединению, которое отправило сообщение |
-| `MessageDeleted` | `dialogId`, `messageId` | Всем участникам диалога |
+| `MessageDeleted` | `dialogId`, `messageId` | Всем участникам диалога (при `scope=me` — только вашим устройствам) |
+| `MessageEdited` | `Message` | Всем участникам диалога |
+| `MessagePinned` | `dialogId`, `Message`, `pinnedById` | Всем участникам диалога |
+| `MessageUnpinned` | `dialogId`, `messageId` | Всем участникам диалога |
 | `UserTyping` | `dialogId`, `userId` | Остальным участникам диалога |
 | `PresenceChanged` | `userId`, `status` | Тем, с кем у пользователя есть диалоги |
 
@@ -195,6 +252,10 @@ const serverUlid = await connection.invoke<string>(
 | `forbidden` | Пользователь не состоит в диалоге (или диалога нет) |
 | `invalid_text` | Пустой текст или длиннее 4000 символов |
 | `invalid_client_message_id` | Пустой или длиннее 64 символов |
+| `invalid_reply_to` | `replyToId` не ULID, не из этого диалога или сообщение удалено |
+| `rate_limited` | Слишком частые вызовы (`SendMessage`/`SendReply` — 20 за 10 с) |
+
+Соединение закрывается сервером, когда истекает access-токен, с которым оно открыто; клиент переподключается с актуальным токеном (`accessTokenFactory`).
 | `unauthorized` | Нет идентификатора пользователя в токене |
 
 ## Сценарии
@@ -247,3 +308,25 @@ if (existing) {
 ### Сохранение состояния при обновлении страницы
 
 Храните `accessToken`, `expiresAt`, id открытого диалога и позицию прокрутки. При старте проверьте `expiresAt`, затем `GET /api/users/me`: ответ `401` означает, что нужен повторный вход. Токен в `localStorage` доступен скриптам страницы, поэтому особенно важно экранировать пользовательский текст при выводе (защита от XSS).
+
+## Файлы: аватар, обои, оформление
+
+Файлы лежат в S3 (см. раздел «Файловое хранилище» в DOCUMENTATION.md). Без настроенного хранилища все файловые эндпоинты отвечают `503`.
+
+```http
+POST   /api/users/me/avatar            multipart, поле file (JPEG/PNG/WebP/GIF, до 5 МБ)   → Profile
+DELETE /api/users/me/avatar                                                               → Profile
+GET    /api/files/avatars/{userId}/{name}.webp     (без токена, кэш на год)                → image/webp
+
+GET    /api/users/me/wallpapers                                                          → [{ "id": "..." }]  (новые первыми)
+POST   /api/users/me/wallpapers        multipart, поле file, до 12 штук                   → 201 { "id": "..." }
+GET    /api/users/me/wallpapers/{id}   (только владельцу, по токену)                      → image/webp
+DELETE /api/users/me/wallpapers/{id}                                                      → 204
+
+GET    /api/users/me/appearance                                                          → JSON-объект ({} если пусто)
+PUT    /api/users/me/appearance        JSON-объект до 4 КБ, формат определяет клиент      → 204
+```
+
+- Любая загруженная картинка декодируется, поворачивается по EXIF и перекодируется в WebP (метаданные, включая геолокацию, удаляются). Аватар: квадрат по центру до 512×512; обои: до 1920 px по большей стороне. Не картинка или повреждённый файл, а также слишком большое разрешение — `400`; лимит обоев — `409`.
+- `Profile.avatarUrl` у загруженной аватарки — относительный путь `/api/files/avatars/...`; клиент дописывает адрес API. `PUT /api/users/me` с тем же `avatarUrl` оставляет аватар как есть, внешние ссылки (https) по-прежнему допустимы.
+- Обои приватны: `<img>` не умеет слать токен, поэтому клиент берёт их через `fetch`, кэширует в Cache Storage и показывает blob-ссылкой.

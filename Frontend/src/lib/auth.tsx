@@ -1,7 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from 'react';
 import * as api from './api';
 import { clearUiState } from './persist';
-import type { AuthResponse, User } from '../types';
+import type { AuthResponse, Profile, User } from '../types';
 
 // token пустой, пока нет сети после запуска: интерфейс открывается из локальной базы, токен подтянется при первом обновлении.
 interface Session { token: string; expiresAt: string; user: User }
@@ -10,7 +10,8 @@ interface Auth {
   login(login: string, password: string): Promise<void>;
   register(v: { login: string; email: string; password: string; displayName?: string }): Promise<void>;
   logout(): void;
-  updateProfile(v: { displayName: string; avatarUrl: string | null }): Promise<void>;
+  updateProfile(v: { displayName: string; avatarUrl: string | null; bio?: string }): Promise<Profile>;
+  applyProfile(p: Profile): void;   // обновить пользователя в сессии после загрузки/удаления аватара
 }
 const Ctx = createContext<Auth>(null as unknown as Auth);
 export const useAuth = () => useContext(Ctx);
@@ -77,7 +78,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     login: async (l, p) => fromResponse(await api.login(l.trim(), p)),
     register: async (v) => fromResponse(await api.register({ ...v, login: v.login.trim(), email: v.email.trim() })),
     logout: () => { api.logout().catch(() => {}); drop(); },
-    updateProfile: async (v) => { const user = await api.updateMe(v); store({ ...session!, user }); },
+    updateProfile: async (v) => {
+      const p = await api.updateMe(v);
+      store({ ...session!, user: { id: p.id, login: p.login, displayName: p.displayName, avatarUrl: p.avatarUrl } });
+      return p;
+    },
+    applyProfile: (p) => store({ ...session!, user: { id: p.id, login: p.login, displayName: p.displayName, avatarUrl: p.avatarUrl } }),
   };
   if (!ready) return null;
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;

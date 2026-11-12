@@ -50,7 +50,8 @@ public sealed class AuthController(
     public async Task<ActionResult<AuthResponse>> Login(LoginRequest req, CancellationToken ct)
     {
         var id = req.Login.Trim().ToLowerInvariant();
-        if (throttle.IsBlocked(id, out var retry))
+        var ip = ClientIp();
+        if (throttle.IsBlocked(ip, id, out var retry))
         {
             Response.Headers.RetryAfter = ((int)retry.TotalSeconds + 1).ToString();
             return Problem(statusCode: StatusCodes.Status429TooManyRequests, title: "Too many failed attempts");
@@ -60,13 +61,48 @@ public sealed class AuthController(
         var passwordOk = BCrypt.Net.BCrypt.Verify(req.Password, user?.PasswordHash ?? DummyHash);
         if (user is null || !passwordOk)
         {
-            throttle.Fail(id);
+            throttle.Fail(ip, id);
             return Problem(statusCode: StatusCodes.Status401Unauthorized, title: "Invalid login or password");
         }
 
-        throttle.Reset(id);
+        throttle.Reset(ip, id);
         return Ok(await StartSessionAsync(user, ct));
     }
+
+    /// <summary>
+    /// Смена пароля. Все остальные сессии (refresh-токены) отзываются, текущая сохраняется.
+    /// Неверный текущий пароль — 400 (не 401: клиент по 401 разлогинивает пользователя).
+    /// </summary>
+    [HttpPost("password"), Authorize, EnableRateLimiting("auth")]
+    public async Task<IActionResult> ChangePassword(ChangePasswordRequest req, CancellationToken ct)
+    {
+        var me = User.GetUserId();
+        var key = "pw:" + me;
+        var ip = ClientIp();
+        if (throttle.IsBlocked(ip, key, out var retry))
+        {
+            Response.Headers.RetryAfter = ((int)retry.TotalSeconds + 1).ToString();
+            return Problem(statusCode: StatusCodes.Status429TooManyRequests, title: "Too many failed attempts");
+        }
+
+        var user = await db.Users.FirstOrDefaultAsync(u => u.Id == me, ct);
+        if (user is null) return Unauthorized();
+        if (!BCrypt.Net.BCrypt.Verify(req.CurrentPassword, user.PasswordHash))
+        {
+            throttle.Fail(ip, key);
+            return Problem(statusCode: StatusCodes.Status400BadRequest, title: "Current password is incorrect");
+        }
+        if (req.NewPassword == req.CurrentPassword)
+            return Problem(statusCode: StatusCodes.Status400BadRequest, title: "New password must differ from the current one");
+
+        user.PasswordHash = BCrypt.Net.BCrypt.HashPassword(req.NewPassword, workFactor: 11);
+        await db.SaveChangesAsync(ct);
+        throttle.Reset(ip, key);
+        await refreshTokens.RevokeAllExceptAsync(me, Request.Cookies[CookieName], ct);
+        return NoContent();
+    }
+
+    private string ClientIp() => HttpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown";
 
     /// <summary>Обновляет access-токен по httpOnly-cookie. Требует заголовок X-Requested-With (защита от CSRF: кросс-сайтовая форма его не поставит).</summary>
     [HttpPost("refresh"), AllowAnonymous, EnableRateLimiting("auth")]

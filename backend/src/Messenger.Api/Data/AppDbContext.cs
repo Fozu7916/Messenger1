@@ -12,6 +12,7 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
     public DbSet<RefreshToken> RefreshTokens => Set<RefreshToken>();
     public DbSet<Message> Messages => Set<Message>();
     public DbSet<MessageHide> MessageHides => Set<MessageHide>();
+    public DbSet<PinnedMessage> PinnedMessages => Set<PinnedMessage>();
 
     // ULID — 26 символов Crockford Base32. Лексикографический порядок == хронологический,
     // но только при коллации "C" (побайтовое сравнение), поэтому задаём её явно.
@@ -30,6 +31,8 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
             e.Property(x => x.PasswordHash).HasMaxLength(100).IsRequired();
             e.Property(x => x.DisplayName).HasMaxLength(64).IsRequired();
             e.Property(x => x.AvatarUrl).HasMaxLength(2048);
+            e.Property(x => x.Bio).HasMaxLength(300);
+            e.Property(x => x.Appearance).HasColumnType("jsonb");
             e.HasIndex(x => x.Login).IsUnique();
             e.HasIndex(x => x.Email).IsUnique();
         });
@@ -78,6 +81,11 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
             e.Property(x => x.ClientMessageId).HasMaxLength(64).IsRequired();
             e.Property(x => x.Text).HasMaxLength(4000).IsRequired();
             e.Property(x => x.MediaUrl).HasMaxLength(2048);
+            e.Property(x => x.ReplyToId).HasMaxLength(26).UseCollation("C");
+            e.Property(x => x.ForwardedFromId).HasMaxLength(26).UseCollation("C");
+            e.Property(x => x.ForwardedFromName).HasMaxLength(64);
+            e.HasOne<Message>().WithMany().HasForeignKey(x => x.ReplyToId).OnDelete(DeleteBehavior.SetNull);
+            e.HasIndex(x => x.ReplyToId);
             e.Property(x => x.CreatedAt).HasDefaultValueSql("now()");
             e.HasOne(x => x.Dialog).WithMany(d => d.Messages).HasForeignKey(x => x.DialogId).OnDelete(DeleteBehavior.Cascade);
             e.HasOne(x => x.Sender).WithMany().HasForeignKey(x => x.SenderId).OnDelete(DeleteBehavior.Restrict);
@@ -88,6 +96,19 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
             e.HasIndex(x => new { x.DialogId, x.Id });
         });
 
+        b.Entity<PinnedMessage>(e =>
+        {
+            e.ToTable("pinned_messages");
+            e.HasKey(x => new { x.DialogId, x.MessageId });
+            UlidColumn(e.Property(x => x.DialogId));
+            UlidColumn(e.Property(x => x.MessageId));
+            UlidColumn(e.Property(x => x.PinnedById));
+            e.Property(x => x.PinnedAt).HasDefaultValueSql("now()");
+            e.HasOne<Dialog>().WithMany().HasForeignKey(x => x.DialogId).OnDelete(DeleteBehavior.Cascade);
+            e.HasOne<Message>().WithMany().HasForeignKey(x => x.MessageId).OnDelete(DeleteBehavior.Cascade);
+            e.HasIndex(x => new { x.DialogId, x.PinnedAt });
+            e.HasIndex(x => x.MessageId);
+        });
         b.Entity<MessageHide>(e =>
         {
             e.ToTable("message_hides");

@@ -1,4 +1,4 @@
-import type { AuthResponse, DialogDto, MessageDto, User } from '../types';
+import type { AuthResponse, DialogDto, MessageDto, Profile, User } from '../types';
 
 export const BASE: string = import.meta.env.VITE_API_URL ?? '';
 
@@ -36,7 +36,7 @@ export function refresh(): Promise<AuthResponse | null> {
 }
 
 const FALLBACK: Record<number, string> = {
-  400: 'Проверьте введённые данные', 401: 'Неверные данные или истёкшая сессия',
+  400: 'Проверьте введённые данные', 413: 'Файл слишком большой', 401: 'Неверные данные или истёкшая сессия',
   404: 'Не найдено', 409: 'Такой логин или email уже занят', 429: 'Слишком много запросов — подождите минуту',
 };
 
@@ -52,8 +52,8 @@ async function req<T>(method: string, path: string, body?: unknown, retried = fa
     res = await fetch(BASE + path, {
       method,
       credentials: 'include',
-      headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
-      body: body === undefined ? undefined : JSON.stringify(body),
+      headers: { ...(body instanceof FormData ? {} : { 'Content-Type': 'application/json' }), ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+      body: body === undefined ? undefined : body instanceof FormData ? body : JSON.stringify(body),
     });
   } catch {
     throw new ApiError(0, 'Нет соединения с сервером');
@@ -76,8 +76,13 @@ export const register = (v: { login: string; email: string; password: string; di
   req<AuthResponse>('POST', '/api/auth/register', v);
 export const login = (login: string, password: string) => req<AuthResponse>('POST', '/api/auth/login', { login, password });
 export const logout = () => req<void>('POST', '/api/auth/logout');
-export const updateMe = (v: { displayName: string; avatarUrl: string | null }) => req<User>('PUT', '/api/users/me', v);
-// Люди: поиск по логину и имени, минимум 2 символа (короче — сервер вернёт пустой список).
+// bio: не передавать — не менять; '' — очистить
+export const updateMe = (v: { displayName: string; avatarUrl: string | null; bio?: string }) => req<Profile>('PUT', '/api/users/me', v);
+export const me = () => req<Profile>('GET', '/api/users/me');
+export const profile = (id: string) => req<Profile>('GET', `/api/users/${id}`);
+export const changePassword = (currentPassword: string, newPassword: string) =>
+  req<void>('POST', '/api/auth/password', { currentPassword, newPassword });
+// Список «Люди» без поиска: все по алфавиту имени.
 export const users = (p: { query?: string; offset?: number; limit?: number } = {}) => {
   const q = new URLSearchParams();
   if (p.query) q.set('query', p.query);
@@ -85,13 +90,21 @@ export const users = (p: { query?: string; offset?: number; limit?: number } = {
   if (p.limit) q.set('limit', String(p.limit));
   return req<User[]>('GET', `/api/users?${q}`);
 };
+// Поиск людей по частям: слова в логине и имени в любом порядке («пет ив» найдёт «Иван Петров»).
+export const searchUsers = (q: string, p: { scope?: 'all' | 'contacts'; offset?: number; limit?: number } = {}) => {
+  const s = new URLSearchParams({ q });
+  if (p.scope) s.set('scope', p.scope);
+  if (p.offset) s.set('offset', String(p.offset));
+  if (p.limit) s.set('limit', String(p.limit));
+  return req<User[]>('GET', `/api/users/search?${s}`);
+};
 export const dialogs = () => req<DialogDto[]>('GET', '/api/dialogs');
 export const createDialog = (userId: string) => req<DialogDto>('POST', '/api/dialogs', { userId });
 export const deleteDialog = (id: string) => req<void>('DELETE', `/api/dialogs/${id}`);
 // scope: 'me' — скрыть только у себя, 'all' — удалить у обоих участников (как в Telegram)
 export const deleteMessage = (id: string, scope: 'me' | 'all' = 'all') => req<void>('DELETE', `/api/messages/${id}?scope=${scope}`);
 export const editMessage = (id: string, text: string) => req<MessageDto>('PUT', `/api/messages/${id}`, { text });
-// Поиск по тексту во всех своих диалогах, от новых к старым.
+// Поиск по тексту сообщений (слова в любом порядке) во всех своих диалогах, от новых к старым.
 export const searchMessages = (q: string, p: { dialogId?: string; before?: string; limit?: number } = {}) => {
   const s = new URLSearchParams({ q });
   if (p.dialogId) s.set('dialogId', p.dialogId);
@@ -106,3 +119,30 @@ export const messages = (dialogId: string, p: { after?: string; before?: string;
   if (p.limit) q.set('limit', String(p.limit));
   return req<MessageDto[]>('GET', `/api/dialogs/${dialogId}/messages?${q}`);
 };
+export const pins = (dialogId: string) => req<MessageDto[]>('GET', `/api/dialogs/${dialogId}/pins`);
+export const pin = (dialogId: string, id: string) => req<void>('PUT', `/api/dialogs/${dialogId}/pins/${id}`);
+export const unpin = (dialogId: string, id: string) => req<void>('DELETE', `/api/dialogs/${dialogId}/pins/${id}`);
+// Пересылка до 50 сообщений в другой свой диалог; clientBatchId делает повтор безопасным
+export const forward = (dialogId: string, v: { toDialogId: string; messageIds: string[]; clientBatchId: string }) =>
+  req<MessageDto[]>('POST', `/api/dialogs/${dialogId}/forward`, v);
+
+// ---- Файлы: аватар, обои, оформление ----
+const form = (file: File) => { const f = new FormData(); f.append('file', file); return f; };
+export const uploadAvatar = (file: File) => req<Profile>('POST', '/api/users/me/avatar', form(file));
+export const deleteAvatar = () => req<Profile>('DELETE', '/api/users/me/avatar');
+export interface Wallpaper { id: string }
+export const wallpapers = () => req<Wallpaper[]>('GET', '/api/users/me/wallpapers');
+export const uploadWallpaper = (file: File) => req<Wallpaper>('POST', '/api/users/me/wallpapers', form(file));
+export const deleteWallpaper = (id: string) => req<void>('DELETE', `/api/users/me/wallpapers/${id}`);
+export const getAppearance = () => req<Record<string, unknown>>('GET', '/api/users/me/appearance');
+export const putAppearance = (v: object) => req<void>('PUT', '/api/users/me/appearance', v);
+
+// Приватный файл по токену → Blob (обычный <img src> не умеет слать Authorization)
+export async function wallpaperBlob(id: string, retried = false): Promise<Blob> {
+  let res: Response;
+  try { res = await fetch(`${BASE}/api/users/me/wallpapers/${id}`, { credentials: 'include', headers: token ? { Authorization: `Bearer ${token}` } : {} }); }
+  catch { throw new ApiError(0, 'Нет соединения с сервером'); }
+  if (res.status === 401 && token && !retried && (await refresh().catch(() => null))) return wallpaperBlob(id, true);
+  if (!res.ok) throw new ApiError(res.status, problemText(res.status, null));
+  return res.blob();
+}

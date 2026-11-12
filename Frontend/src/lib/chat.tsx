@@ -20,10 +20,14 @@ interface Chat {
   lastSeen: Record<string, number>;     // userId → время последнего выхода (мс)
   renamed: Record<string, string>;      // временный id диалога → серверный id
   setActive(id: string | null): void;
-  send(dialogId: string, text: string): void;
+  pins: Record<string, string[]>;       // dialogId → серверные id закреплённых сообщений (сначала закреплённые позже)
+  send(dialogId: string, text: string, replyToId?: string): void;
   retry(m: MessageDoc): void;
   remove(m: MessageDoc, scope: 'me' | 'all'): Promise<void>;
   edit(m: MessageDoc, text: string): Promise<void>;
+  forward(list: MessageDoc[], toDialogId: string): Promise<void>;
+  loadPins(dialogId: string): Promise<void>;
+  setPinned(m: MessageDoc, pinned: boolean): Promise<void>;
   startDialog(user: User): Promise<string>;
   removeDialog(id: string): Promise<void>;
   loadOlder(dialogId: string): Promise<number>;
@@ -46,6 +50,7 @@ const toLocal = (m: MessageDto): MessageDoc => ({
   clientMessageId: m.clientMessageId || m.id, id: m.id, dialogId: m.dialogId, senderId: m.senderId,
   text: m.text, createdAt: Date.parse(m.createdAt), status: 'sent', isDeleted: false,
   editedAt: m.editedAt ? Date.parse(m.editedAt) : 0,
+  replyToId: m.replyToId ?? '', fwdFrom: m.forwardedFromName ?? '',
 });
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -76,6 +81,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   const [presence, setPresence] = useState<Record<string, boolean>>({});
   const [lastSeen, setLastSeen] = useState<Record<string, number>>({});
   const [renamed, setRenamed] = useState<Record<string, string>>({});
+  const [pins, setPins] = useState<Record<string, string[]>>({});
 
   const dbRef = useRef<DB | null>(null);
   const hubRef = useRef<HubConnection | null>(null);
@@ -91,6 +97,15 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   const connected = () => hubRef.current?.state === HubConnectionState.Connected;
   const report = (e: unknown) => { console.error(e); setError(errText(e)); };
   const upsertMessages = (list: MessageDto[]) => dbRef.current!.messages.bulkUpsert(list.map(toLocal));
+  const dropPin = (messageId: string) =>
+    setPins((p) => Object.fromEntries(Object.entries(p).map(([k, v]) => [k, v.filter((x) => x !== messageId)])));
+  // Закреплённые приходят с сервера (общие для обоих участников); сами сообщения кладём в локальную БД, чтобы показать текст
+  const loadPins = async (dialogId: string) => {
+    if (isTemp(dialogId) || !dbRef.current) return;
+    const list = await api.pins(dialogId);
+    await upsertMessages(list);
+    setPins((p) => ({ ...p, [dialogId]: list.map((x) => x.id) }));
+  };
 
   // ---------- Диалог, созданный офлайн, превращается в серверный ----------
   const materialize = (tempId: string): Promise<string | null> => {
@@ -165,6 +180,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     if (!connected() || inflight.current.has(cid)) return;
     inflight.current.add(cid);
     const d = dbRef.current!;
+    let retryPlain = false;
     try {
       const doc = await d.messages.findOne(cid).exec();
       if (!doc) return;
@@ -175,15 +191,22 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         if (!real) return;
         m = { ...m, dialogId: real };
       }
-      const serverUlid: string = await hubRef.current!.invoke('SendMessage', m.clientMessageId, m.dialogId, m.text);
+      const serverUlid: string = m.replyToId
+        ? await hubRef.current!.invoke('SendReply', m.clientMessageId, m.dialogId, m.text, m.replyToId)
+        : await hubRef.current!.invoke('SendMessage', m.clientMessageId, m.dialogId, m.text);
       await (await d.messages.findOne(cid).exec())?.incrementalPatch({ id: serverUlid, status: 'sent' });
     } catch (e) {
       // ошибки валидации/доступа — повтор бессмысленен; сетевые — оставляем pending до появления сети
-      const fatal = /forbidden|invalid_text|invalid_client_message_id/.test(String(e))
+      if (/invalid_reply_to/.test(String(e))) { // исходное сообщение удалено — отправляем как обычное, а не теряем текст
+        await (await d.messages.findOne(cid).exec())?.incrementalPatch({ replyToId: '' });
+        retryPlain = true;
+      }
+      const fatal = !retryPlain && /forbidden|invalid_text|invalid_client_message_id/.test(String(e))
         || (e instanceof api.ApiError && (e.status === 400 || e.status === 404));
       if (fatal) await (await d.messages.findOne(cid).exec())?.incrementalPatch({ status: 'failed' });
-      else console.warn('push postponed', e);
+      else if (!retryPlain) console.warn('push postponed', e);
     } finally { inflight.current.delete(cid); }
+    if (retryPlain) await push(cid);
   };
 
   const flushPending = async () => {
@@ -197,6 +220,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     try { await flushPending(); } catch (e) { report(e); }
     void refreshPresence();
     const a = activeRef.current;
+    if (a) void loadPins(a).catch((e) => console.warn('pins refresh failed', e));
     if (a && document.visibilityState === 'visible') void markRead(a);
   };
   const sync = () => { chain.current = chain.current.then(runSync); return chain.current as Promise<void>; };
@@ -298,6 +322,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       hub.on('MessageDeleted', async (did: string, messageId: string) => {
         const doc = await d.messages.findOne({ selector: { id: messageId } }).exec();
         if (!doc) return;
+        dropPin(messageId);
         const incoming = (doc.toJSON() as MessageDoc).senderId !== me.id;
         await doc.incrementalPatch({ isDeleted: true });
         // удалили непрочитанное входящее — пересчитываем счётчик непрочитанных с сервера
@@ -307,6 +332,11 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         await (await d.messages.findOne({ selector: { id: m.id } }).exec())
           ?.incrementalPatch({ text: m.text, editedAt: m.editedAt ? Date.parse(m.editedAt) : Date.now() });
       });
+      hub.on('MessagePinned', async (did: string, m: MessageDto) => {
+        await upsertMessages([m]);
+        setPins((p) => ({ ...p, [did]: [m.id, ...(p[did] ?? []).filter((x) => x !== m.id)] }));
+      });
+      hub.on('MessageUnpinned', (_did: string, messageId: string) => dropPin(messageId));
       hub.on('MessagesRead', async (did: string, uid: string, upTo: string) => {
         const doc = await d.dialogs.findOne(did).exec();
         if (!doc) return;
@@ -351,15 +381,16 @@ export function ChatProvider({ children }: { children: ReactNode }) {
 
   // ---------- Действия интерфейса ----------
   const value: Chat = {
-    db, dbError, error, status, typing, presence, lastSeen, renamed,
+    db, dbError, error, status, typing, presence, lastSeen, renamed, pins,
     setActive: (id) => {
       activeRef.current = id;
       if (id) { void clearUnread(id); void markRead(id); }
     },
-    send: (dialogId, text) => {
+    send: (dialogId, text, replyToId) => {
       const m: MessageDoc = {
         clientMessageId: newId(), id: '', dialogId, senderId: me.id, text,
         createdAt: Date.now(), status: 'pending', isDeleted: false, editedAt: 0,
+        replyToId: replyToId ?? '', fwdFrom: '',
       };
       // Optimistic UI: сообщение сразу попадает в локальную БД и на экран, сеть — потом
       dbRef.current!.messages.insert(m).then(() => push(m.clientMessageId)).catch(report);
@@ -384,6 +415,28 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       if (!m.id) { await doc.incrementalPatch({ text: t }); return; } // ещё не ушло на сервер — правим локально
       const dto = await api.editMessage(m.id, t);
       await doc.getLatest().incrementalPatch({ text: dto.text, editedAt: dto.editedAt ? Date.parse(dto.editedAt) : Date.now() });
+    },
+    // Пересылка требует сети: копии создаёт сервер (он же проставляет исходного автора)
+    forward: async (list, toDialogId) => {
+      const sent = list.filter((m) => m.id && !isTemp(m.dialogId));
+      if (!sent.length) throw new Error('Сообщение ещё не отправлено');
+      let to = toDialogId;
+      if (isTemp(to)) {
+        const real = await materialize(to);
+        if (!real) throw new Error('Не удалось создать диалог');
+        to = real;
+      }
+      const batch = newId().replace(/-/g, '').slice(0, 32);
+      await upsertMessages(await api.forward(sent[0].dialogId, { toDialogId: to, messageIds: sent.map((m) => m.id), clientBatchId: batch }));
+    },
+    loadPins,
+    setPinned: async (m, pinned) => {
+      if (!m.id) return;
+      if (pinned) await api.pin(m.dialogId, m.id); else await api.unpin(m.dialogId, m.id);
+      setPins((p) => {
+        const cur = (p[m.dialogId] ?? []).filter((x) => x !== m.id);
+        return { ...p, [m.dialogId]: pinned ? [m.id, ...cur] : cur };
+      });
     },
     startDialog: async (user) => {
       const d = dbRef.current!;

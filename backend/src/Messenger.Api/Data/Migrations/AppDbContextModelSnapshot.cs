@@ -117,10 +117,27 @@ namespace Messenger.Api.Data.Migrations
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("edited_at");
 
+                    b.Property<string>("ForwardedFromId")
+                        .HasMaxLength(26)
+                        .HasColumnType("character varying(26)")
+                        .HasColumnName("forwarded_from_id")
+                        .UseCollation("C");
+
+                    b.Property<string>("ForwardedFromName")
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("forwarded_from_name");
+
                     b.Property<string>("MediaUrl")
                         .HasMaxLength(2048)
                         .HasColumnType("character varying(2048)")
                         .HasColumnName("media_url");
+
+                    b.Property<string>("ReplyToId")
+                        .HasMaxLength(26)
+                        .HasColumnType("character varying(26)")
+                        .HasColumnName("reply_to_id")
+                        .UseCollation("C");
 
                     b.Property<string>("SenderId")
                         .IsRequired()
@@ -140,6 +157,9 @@ namespace Messenger.Api.Data.Migrations
 
                     b.HasIndex("DialogId", "Id")
                         .HasDatabaseName("ix_messages_dialog_id_id");
+
+                    b.HasIndex("ReplyToId")
+                        .HasDatabaseName("ix_messages_reply_to_id");
 
                     b.HasIndex("SenderId", "ClientMessageId")
                         .IsUnique()
@@ -175,6 +195,45 @@ namespace Messenger.Api.Data.Migrations
                         .HasDatabaseName("ix_message_hides_user_id");
 
                     b.ToTable("message_hides", (string)null);
+                });
+
+            modelBuilder.Entity("Messenger.Api.Domain.PinnedMessage", b =>
+                {
+                    b.Property<string>("DialogId")
+                        .HasMaxLength(26)
+                        .HasColumnType("character varying(26)")
+                        .HasColumnName("dialog_id")
+                        .UseCollation("C");
+
+                    b.Property<string>("MessageId")
+                        .HasMaxLength(26)
+                        .HasColumnType("character varying(26)")
+                        .HasColumnName("message_id")
+                        .UseCollation("C");
+
+                    b.Property<DateTime>("PinnedAt")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("pinned_at")
+                        .HasDefaultValueSql("now()");
+
+                    b.Property<string>("PinnedById")
+                        .IsRequired()
+                        .HasMaxLength(26)
+                        .HasColumnType("character varying(26)")
+                        .HasColumnName("pinned_by_id")
+                        .UseCollation("C");
+
+                    b.HasKey("DialogId", "MessageId")
+                        .HasName("pk_pinned_messages");
+
+                    b.HasIndex("MessageId")
+                        .HasDatabaseName("ix_pinned_messages_message_id");
+
+                    b.HasIndex("DialogId", "PinnedAt")
+                        .HasDatabaseName("ix_pinned_messages_dialog_id_pinned_at");
+
+                    b.ToTable("pinned_messages", (string)null);
                 });
 
             modelBuilder.Entity("Messenger.Api.Domain.RefreshToken", b =>
@@ -237,10 +296,19 @@ namespace Messenger.Api.Data.Migrations
                         .HasColumnName("id")
                         .UseCollation("C");
 
+                    b.Property<string>("Appearance")
+                        .HasColumnType("jsonb")
+                        .HasColumnName("appearance");
+
                     b.Property<string>("AvatarUrl")
                         .HasMaxLength(2048)
                         .HasColumnType("character varying(2048)")
                         .HasColumnName("avatar_url");
+
+                    b.Property<string>("Bio")
+                        .HasMaxLength(300)
+                        .HasColumnType("character varying(300)")
+                        .HasColumnName("bio");
 
                     b.Property<DateTime>("CreatedAt")
                         .HasColumnType("timestamp with time zone")
@@ -318,6 +386,12 @@ namespace Messenger.Api.Data.Migrations
                         .IsRequired()
                         .HasConstraintName("fk_messages_dialogs_dialog_id");
 
+                    b.HasOne("Messenger.Api.Domain.Message", null)
+                        .WithMany()
+                        .HasForeignKey("ReplyToId")
+                        .OnDelete(DeleteBehavior.SetNull)
+                        .HasConstraintName("fk_messages_messages_reply_to_id");
+
                     b.HasOne("Messenger.Api.Domain.User", "Sender")
                         .WithMany()
                         .HasForeignKey("SenderId")
@@ -345,6 +419,23 @@ namespace Messenger.Api.Data.Migrations
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired()
                         .HasConstraintName("fk_message_hides_users_user_id");
+                });
+
+            modelBuilder.Entity("Messenger.Api.Domain.PinnedMessage", b =>
+                {
+                    b.HasOne("Messenger.Api.Domain.Dialog", null)
+                        .WithMany()
+                        .HasForeignKey("DialogId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired()
+                        .HasConstraintName("fk_pinned_messages_dialogs_dialog_id");
+
+                    b.HasOne("Messenger.Api.Domain.Message", null)
+                        .WithMany()
+                        .HasForeignKey("MessageId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired()
+                        .HasConstraintName("fk_pinned_messages_messages_message_id");
                 });
 
             modelBuilder.Entity("Messenger.Api.Domain.RefreshToken", b =>

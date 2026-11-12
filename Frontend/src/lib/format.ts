@@ -21,6 +21,11 @@ export const isHttpUrl = (s: string) => {
   } catch { return false; }
 };
 
+// Поиск «по частям»: каждое слово запроса должно встретиться в тексте, в любом порядке (как на сервере).
+export const matchesAll = (text: string, query: string) => {
+  const t = text.toLowerCase();
+  return query.toLowerCase().split(/\s+/).filter(Boolean).every((w) => t.includes(w));
+};
 export const fmtLastSeen = (ts: number, now = Date.now()) => {
   const diff = now - ts, d = new Date(ts), t = fmtTime(ts), today = new Date(now).setHours(0, 0, 0, 0);
   if (diff < 60_000) return 'был(а) в сети только что';

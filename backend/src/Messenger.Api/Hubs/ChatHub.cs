@@ -7,8 +7,8 @@ using Microsoft.AspNetCore.SignalR;
 namespace Messenger.Api.Hubs;
 
 /// <summary>
-/// Клиент → сервер: SendMessage, Typing, MarkRead, GetOnlineContacts.
-/// Сервер → клиент: MessageReceived, MessageAcked, MessageDeleted, MessageEdited, MessagesRead, UserTyping, PresenceChanged.
+/// Клиент → сервер: SendMessage, SendReply, Typing, MarkRead, GetOnlineContacts.
+/// Сервер → клиент: MessageReceived, MessageAcked, MessageDeleted, MessageEdited, MessagePinned, MessageUnpinned, MessagesRead, UserTyping, PresenceChanged.
 /// Рассылка идёт через Clients.Users(...) — работает между инстансами благодаря Redis backplane.
 /// </summary>
 [Authorize]
@@ -22,9 +22,24 @@ public sealed class ChatHub(IMessageRepository messages, IDialogAccess dialogs, 
 
     public override async Task OnConnectedAsync()
     {
+        ScheduleTokenExpiry();
         if (presence.UserConnected(UserId, Context.ConnectionId))
             await NotifyPresenceAsync(UserId, "online");
         await base.OnConnectedAsync();
+    }
+
+    /// <summary>
+    /// JWT проверяется только при подключении. Чтобы сессия не жила дольше access-токена, закрываем соединение
+    /// по его exp: клиент переподключается уже со свежим токеном (accessTokenFactory).
+    /// </summary>
+    private void ScheduleTokenExpiry()
+    {
+        if (!long.TryParse(Context.User?.FindFirst("exp")?.Value, out var exp)) return;
+        var delay = DateTimeOffset.FromUnixTimeSeconds(exp) - DateTimeOffset.UtcNow;
+        if (delay < TimeSpan.Zero) delay = TimeSpan.Zero;
+        var ctx = Context;
+        _ = Task.Delay(delay, ctx.ConnectionAborted)
+            .ContinueWith(t => { if (!t.IsCanceled) ctx.Abort(); }, TaskScheduler.Default);
     }
 
     public override async Task OnDisconnectedAsync(Exception? exception)
@@ -42,7 +57,14 @@ public sealed class ChatHub(IMessageRepository messages, IDialogAccess dialogs, 
     /// Сохраняет сообщение и рассылает его участникам диалога. Возвращает серверный ULID.
     /// Повторный вызов с тем же clientMessageId не создаёт дубликат и не рассылает событие повторно.
     /// </summary>
-    public async Task<string> SendMessage(string clientMessageId, string dialogId, string text)
+    public Task<string> SendMessage(string clientMessageId, string dialogId, string text) =>
+        SendCore(clientMessageId, dialogId, text, null);
+
+    /// <summary>То же, что SendMessage, но сообщение — ответ на replyToId (оно должно быть в этом же диалоге и не удалено).</summary>
+    public Task<string> SendReply(string clientMessageId, string dialogId, string text, string replyToId) =>
+        SendCore(clientMessageId, dialogId, text, replyToId);
+
+    private async Task<string> SendCore(string clientMessageId, string dialogId, string text, string? replyToId)
     {
         var senderId = UserId;
         if (!limits.TryAcquire("send:" + senderId, 20, TimeSpan.FromSeconds(10)))
@@ -57,6 +79,9 @@ public sealed class ChatHub(IMessageRepository messages, IDialogAccess dialogs, 
         var members = await dialogs.GetMemberIdsAsync(dialogId ?? "");
         if (!members.Contains(senderId))
             throw new HubException("forbidden");   // одинаково для «нет диалога» и «чужой диалог»
+        if (replyToId is not null
+            && (!Ulid.TryParse(replyToId, out _) || !await messages.ExistsInDialogAsync(dialogId!, replyToId)))
+            throw new HubException("invalid_reply_to");
 
         var result = await messages.SaveAsync(new NewMessage(
             Id: Ulid.NewUlid().ToString(),
@@ -64,7 +89,8 @@ public sealed class ChatHub(IMessageRepository messages, IDialogAccess dialogs, 
             DialogId: dialogId!,
             SenderId: senderId,
             Text: text,
-            MediaUrl: null));
+            MediaUrl: null,
+            ReplyToId: replyToId));
 
         await Clients.Caller.SendAsync("MessageAcked", clientMessageId, result.Message.Id);
         if (result.IsNew)

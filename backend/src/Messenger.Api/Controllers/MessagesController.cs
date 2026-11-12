@@ -5,12 +5,13 @@ using Messenger.Api.Hubs;
 using Messenger.Api.Messages;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.EntityFrameworkCore;
 
 namespace Messenger.Api.Controllers;
 
-[ApiController, Authorize]
+[ApiController, Authorize, EnableRateLimiting("users")]
 public sealed class MessagesController(
     AppDbContext db,
     IMessageRepository messages,
@@ -44,7 +45,8 @@ public sealed class MessagesController(
     }
 
     /// <summary>
-    /// Поиск по тексту сообщений во всех своих диалогах (или в одном — dialogId). Минимум 2 символа.
+    /// Поиск по тексту сообщений (не людей — для них /api/users/search) во всех своих диалогах или в одном (dialogId).
+    /// Запрос разбивается на слова: в сообщении должны встретиться все, в любом порядке. Минимум 2 символа.
     /// Результат — от новых к старым; before=ULID последнего элемента отдаёт следующую страницу.
     /// </summary>
     [HttpGet("api/messages/search")]
@@ -65,7 +67,8 @@ public sealed class MessagesController(
         if (dialogId is not null && !await access.IsMemberAsync(dialogId, me, ct))
             return NotFound();
 
-        var items = await messages.SearchAsync(me, query, dialogId, before, Math.Clamp(limit, 1, 50), ct);
+        var tokens = SearchText.Tokens(query);
+        var items = await messages.SearchAsync(me, tokens, dialogId, before, Math.Clamp(limit, 1, 50), ct);
         return Ok(items);
     }
 
@@ -89,7 +92,8 @@ public sealed class MessagesController(
             await db.SaveChangesAsync(ct);
         }
 
-        var dto = new MessageDto(msg.Id, msg.ClientMessageId, msg.DialogId, msg.SenderId, msg.Text, msg.MediaUrl, msg.CreatedAt, msg.EditedAt);
+        var dto = new MessageDto(msg.Id, msg.ClientMessageId, msg.DialogId, msg.SenderId, msg.Text, msg.MediaUrl, msg.CreatedAt, msg.EditedAt,
+            msg.ReplyToId, msg.ForwardedFromId, msg.ForwardedFromName);
         if (changed)
         {
             var members = await access.GetMemberIdsAsync(msg.DialogId, ct);
@@ -128,10 +132,108 @@ public sealed class MessagesController(
 
         await db.Messages.Where(m => m.Id == id)
             .ExecuteUpdateAsync(s => s.SetProperty(m => m.DeletedAt, (DateTime?)DateTime.UtcNow), ct);
-
+        var unpinned = await db.PinnedMessages.Where(p => p.MessageId == id).ExecuteDeleteAsync(ct);
         var members = await access.GetMemberIdsAsync(dialogId, ct);
+        if (unpinned > 0) await hub.Clients.Users(members).SendAsync("MessageUnpinned", dialogId, id, ct);
         await hub.Clients.Users(members).SendAsync("MessageDeleted", dialogId, id, ct);
 
         return NoContent();
+    }
+
+    private const int MaxPins = 10;
+
+    /// <summary>Закреплённые сообщения диалога (видимые мне), сначала закреплённые позже.</summary>
+    [HttpGet("api/dialogs/{dialogId}/pins")]
+    public async Task<ActionResult<IReadOnlyList<MessageDto>>> GetPins(string dialogId, CancellationToken ct)
+    {
+        var me = User.GetUserId();
+        if (!await access.IsMemberAsync(dialogId, me, ct)) return NotFound();
+        return Ok(await messages.GetPinnedAsync(dialogId, me, ct));
+    }
+
+    /// <summary>
+    /// Закрепляет сообщение для обоих участников (до 10 на диалог, повтор — no-op). Любой участник может закрепить любое сообщение.
+    /// Участникам уходит MessagePinned(dialogId, message, pinnedById).
+    /// </summary>
+    [HttpPut("api/dialogs/{dialogId}/pins/{messageId}")]
+    public async Task<IActionResult> Pin(string dialogId, string messageId, CancellationToken ct)
+    {
+        var me = User.GetUserId();
+        if (!await access.IsMemberAsync(dialogId, me, ct)) return NotFound();
+        if (!Ulid.TryParse(messageId, out _)) return NotFound();
+        var found = await messages.GetByIdsAsync(dialogId, me, [messageId], ct);
+        if (found.Count == 0) return NotFound();
+        if (await db.PinnedMessages.CountAsync(p => p.DialogId == dialogId, ct) >= MaxPins
+            && !await db.PinnedMessages.AnyAsync(p => p.DialogId == dialogId && p.MessageId == messageId, ct))
+            return Problem(statusCode: StatusCodes.Status409Conflict, title: $"At most {MaxPins} pinned messages per dialog");
+
+        var added = await db.Database.ExecuteSqlInterpolatedAsync(
+            $"INSERT INTO pinned_messages (dialog_id, message_id, pinned_by_id) VALUES ({dialogId}, {messageId}, {me}) ON CONFLICT DO NOTHING", ct);
+        if (added > 0)
+        {
+            var members = await access.GetMemberIdsAsync(dialogId, ct);
+            await hub.Clients.Users(members).SendAsync("MessagePinned", dialogId, found[0], me, ct);
+        }
+        return NoContent();
+    }
+
+    /// <summary>Открепляет сообщение. Участникам уходит MessageUnpinned(dialogId, messageId).</summary>
+    [HttpDelete("api/dialogs/{dialogId}/pins/{messageId}")]
+    public async Task<IActionResult> Unpin(string dialogId, string messageId, CancellationToken ct)
+    {
+        var me = User.GetUserId();
+        if (!await access.IsMemberAsync(dialogId, me, ct)) return NotFound();
+        var removed = await db.PinnedMessages.Where(p => p.DialogId == dialogId && p.MessageId == messageId).ExecuteDeleteAsync(ct);
+        if (removed > 0)
+        {
+            var members = await access.GetMemberIdsAsync(dialogId, ct);
+            await hub.Clients.Users(members).SendAsync("MessageUnpinned", dialogId, messageId, ct);
+        }
+        return NoContent();
+    }
+
+    /// <summary>
+    /// Пересылка сообщений из диалога dialogId в toDialogId (оба — мои). Копии получают ForwardedFromId/Name оригинального автора
+    /// (при повторной пересылке сохраняется первый автор). Идемпотентно по clientBatchId. Получателям уходит MessageReceived.
+    /// </summary>
+    [HttpPost("api/dialogs/{dialogId}/forward")]
+    public async Task<ActionResult<IReadOnlyList<MessageDto>>> Forward(string dialogId, ForwardRequest req, CancellationToken ct)
+    {
+        var me = User.GetUserId();
+        if (!await access.IsMemberAsync(dialogId, me, ct) || !await access.IsMemberAsync(req.ToDialogId, me, ct))
+            return NotFound();
+        var ids = req.MessageIds.Distinct().ToList();
+        if (ids.Any(i => !Ulid.TryParse(i, out _)))
+            return Problem(statusCode: StatusCodes.Status400BadRequest, title: "messageIds must be valid ULIDs");
+        var source = await messages.GetByIdsAsync(dialogId, me, ids, ct);
+        if (source.Count != ids.Count) return NotFound();
+
+        var authorIds = source.Where(m => m.ForwardedFromId is null).Select(m => m.SenderId).Distinct().ToList();
+        var names = await db.Users.AsNoTracking().Where(u => authorIds.Contains(u.Id)).ToDictionaryAsync(u => u.Id, u => u.DisplayName, ct);
+
+        var members = await access.GetMemberIdsAsync(req.ToDialogId, ct);
+        var result = new List<MessageDto>(source.Count);
+        string? prev = null;
+        for (var i = 0; i < source.Count; i++)
+        {
+            var m = source[i];
+            // ULID строго возрастает внутри пачки, иначе порядок пересланных сообщений мог бы смешаться в пределах одной миллисекунды
+            string id;
+            do { id = Ulid.NewUlid().ToString(); } while (prev is not null && string.CompareOrdinal(id, prev) <= 0);
+            prev = id;
+
+            var saved = await messages.SaveAsync(new NewMessage(
+                Id: id,
+                ClientMessageId: $"{req.ClientBatchId}:{i}",
+                DialogId: req.ToDialogId,
+                SenderId: me,
+                Text: m.Text,
+                MediaUrl: m.MediaUrl,
+                ForwardedFromId: m.ForwardedFromId ?? m.SenderId,
+                ForwardedFromName: m.ForwardedFromName ?? (names.TryGetValue(m.SenderId, out var n) ? n : null)), ct);
+            result.Add(saved.Message);
+            if (saved.IsNew) await hub.Clients.Users(members).SendAsync("MessageReceived", saved.Message, ct);
+        }
+        return Ok(result);
     }
 }

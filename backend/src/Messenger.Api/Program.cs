@@ -4,6 +4,7 @@ using Messenger.Api.Auth;
 using Messenger.Api.Data;
 using Messenger.Api.Hubs;
 using Messenger.Api.Messages;
+using Messenger.Api.Storage;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.AspNetCore.SignalR;
@@ -32,11 +33,13 @@ builder.Services.AddDbContext<AppDbContext>((sp, o) =>
     o.UseNpgsql(sp.GetRequiredService<NpgsqlDataSource>()).UseSnakeCaseNamingConvention());
 builder.Services.AddScoped<IMessageRepository, MessageRepository>();
 builder.Services.AddScoped<IDialogAccess, DialogAccess>();
+builder.Services.AddFileStorage(config);   // S3: Yandex Object Storage (прод) / MinIO (локально); без настроек — заглушка
 
 // ---------- Аутентификация ----------
 builder.Services.AddSingleton<ITokenService, TokenService>();
 builder.Services.AddScoped<IRefreshTokenService, RefreshTokenService>();
 builder.Services.AddSingleton<LoginThrottle>();
+builder.Services.AddHostedService<RefreshTokenCleanup>();
 builder.Services.AddSingleton<HubRateLimiter>();
 builder.Services.AddSingleton<IUserIdProvider, SubClaimUserIdProvider>();
 builder.Services
@@ -73,6 +76,8 @@ builder.Services.AddAuthorization();
 builder.Services.Configure<ForwardedHeadersOptions>(o =>
 {
     o.ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto;
+    // ForwardLimit = 1: берётся только последняя запись X-Forwarded-For (её дописал ваш прокси), подделанные клиентом слева игнорируются.
+    o.ForwardLimit = config.GetValue("ForwardedHeaders:ForwardLimit", 1);
     o.KnownIPNetworks.Clear();
     o.KnownProxies.Clear();
     // Задайте ForwardedHeaders:KnownProxies / KnownNetworks (CIDR) — тогда X-Forwarded-* принимаются только от них.
@@ -131,6 +136,7 @@ builder.Services.AddSwaggerGen();
 
 var app = builder.Build();
 
+var connectSrc = "'self' wss: " + string.Join(' ', config.GetSection("Csp:ConnectSrc").Get<string[]>() ?? []);
 app.UseForwardedHeaders();   // самым первым
 
 app.Use(async (ctx, next) =>
@@ -140,9 +146,9 @@ app.Use(async (ctx, next) =>
     h["X-Frame-Options"] = "DENY";
     h["Referrer-Policy"] = "no-referrer";
     h["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()";
-    // img-src https: — аватары по внешним ссылкам; connect-src 'self' wss: — API и SignalR (при отдельном домене API добавьте его).
+    // img-src https: — аватары по внешним ссылкам; connect-src — свой origin и wss плюс Csp:ConnectSrc (если API на другом домене).
     h["Content-Security-Policy"] = "default-src 'self'; img-src 'self' https: data:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; " +
-        "font-src 'self' https://fonts.gstatic.com; script-src 'self'; connect-src 'self' wss: https:; frame-ancestors 'none'; base-uri 'self'; object-src 'none'";
+        "font-src 'self' https://fonts.gstatic.com; script-src 'self'; connect-src " + connectSrc + "; frame-ancestors 'none'; base-uri 'self'; object-src 'none'";
     await next();
 });
 if (!app.Environment.IsDevelopment()) app.UseHsts();

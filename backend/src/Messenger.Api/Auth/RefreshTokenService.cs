@@ -14,6 +14,8 @@ public interface IRefreshTokenService
     /// <summary>Меняет токен на новый. null — токен неизвестен, просрочен или отозван.</summary>
     Task<(User User, string Raw)?> RotateAsync(string raw, CancellationToken ct);
     Task RevokeAsync(string? raw, CancellationToken ct);
+    /// <summary>Отзывает все сессии пользователя, кроме той, что соответствует keepRaw (если задан).</summary>
+    Task RevokeAllExceptAsync(string userId, string? keepRaw, CancellationToken ct);
 }
 
 public sealed class RefreshTokenService(AppDbContext db, IOptions<JwtOptions> options, IConfiguration config) : IRefreshTokenService
@@ -28,8 +30,6 @@ public sealed class RefreshTokenService(AppDbContext db, IOptions<JwtOptions> op
         var (entity, raw) = Create(userId);
         db.RefreshTokens.Add(entity);
         await db.SaveChangesAsync(ct);
-        var old = DateTime.UtcNow.AddDays(-1);
-        await db.RefreshTokens.Where(t => t.ExpiresAt < old).ExecuteDeleteAsync(ct);   // уборка просроченных
         return raw;
     }
 
@@ -56,12 +56,14 @@ public sealed class RefreshTokenService(AppDbContext db, IOptions<JwtOptions> op
         if (user is null) return null;
 
         var (next, nextRaw) = Create(token.UserId);
-        db.RefreshTokens.Add(next);
         if (token.RevokedAt is null)
         {
-            token.RevokedAt = now;
-            token.ReplacedById = next.Id;
+            // Условный UPDATE: если параллельный запрос успел отозвать токен между чтением и записью,
+            // это та же безобидная гонка (grace), а не потерянное обновление.
+            await db.RefreshTokens.Where(t => t.Id == token.Id && t.RevokedAt == null)
+                .ExecuteUpdateAsync(u => u.SetProperty(t => t.RevokedAt, now).SetProperty(t => t.ReplacedById, next.Id), ct);
         }
+        db.RefreshTokens.Add(next);
         await db.SaveChangesAsync(ct);
         return (user, nextRaw);
     }
@@ -72,6 +74,14 @@ public sealed class RefreshTokenService(AppDbContext db, IOptions<JwtOptions> op
         var hash = Hash(raw);
         var now = DateTime.UtcNow;
         await db.RefreshTokens.Where(t => t.TokenHash == hash && t.RevokedAt == null)
+            .ExecuteUpdateAsync(u => u.SetProperty(t => t.RevokedAt, now), ct);
+    }
+
+    public async Task RevokeAllExceptAsync(string userId, string? keepRaw, CancellationToken ct)
+    {
+        var keep = string.IsNullOrEmpty(keepRaw) ? "" : Hash(keepRaw);
+        var now = DateTime.UtcNow;
+        await db.RefreshTokens.Where(t => t.UserId == userId && t.RevokedAt == null && t.TokenHash != keep)
             .ExecuteUpdateAsync(u => u.SetProperty(t => t.RevokedAt, now), ct);
     }
 

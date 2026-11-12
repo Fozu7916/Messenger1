@@ -17,8 +17,10 @@ const messageSchema: RxJsonSchema<MessageDoc> = {
     status: { type: 'string', maxLength: 10 },
     isDeleted: { type: 'boolean' },
     editedAt: { type: 'number' },
+    replyToId: { type: 'string', maxLength: 26 },
+    fwdFrom: { type: 'string', maxLength: 64 },
   },
-  required: ['clientMessageId', 'id', 'dialogId', 'senderId', 'text', 'createdAt', 'status', 'isDeleted', 'editedAt'],
+  required: ['clientMessageId', 'id', 'dialogId', 'senderId', 'text', 'createdAt', 'status', 'isDeleted', 'editedAt', 'replyToId', 'fwdFrom'],
   indexes: ['dialogId'],
 };
 
@@ -40,7 +42,7 @@ const dialogSchema: RxJsonSchema<DialogDoc> = {
 };
 
 // Отдельная локальная БД на каждого пользователя (IndexedDB через Dexie).
-// Префикс messenger3- — схема изменилась (editedAt, peerRead), старые БД «messenger-…» и «messenger2-…» больше не используются.
+// Префикс messenger4- — схема изменилась (replyToId, fwdFrom), старые БД «messenger-…», «messenger2-…» и «messenger3-…» больше не используются.
 // Состояние лежит в globalThis: при горячей перезагрузке модулей Vite экземпляр БД переиспользуется,
 // иначе RxDB ругается на повторное создание БД с тем же именем (DB8).
 interface Holder { cache: { name: string; p: Promise<DB> } | null; closing: Promise<void> }
@@ -55,7 +57,7 @@ const create = async (name: string): Promise<DB> => {
 
 export async function openDb(userId: string): Promise<DB> {
   await S.closing;
-  const name = 'messenger3-' + userId.toLowerCase();
+  const name = 'messenger4-' + userId.toLowerCase();
   if (S.cache?.name === name) return S.cache.p;
   const p = create(name).catch(async (e) => {
     // Повреждённую БД или несовпавшую схему пересоздаём (копия восстановится с сервера).

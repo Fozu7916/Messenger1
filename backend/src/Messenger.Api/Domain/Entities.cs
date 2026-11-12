@@ -8,6 +8,10 @@ public class User
     public string PasswordHash { get; set; } = "";
     public string DisplayName { get; set; } = "";
     public string? AvatarUrl { get; set; }
+    /// <summary>О себе (до 300 символов), показывается в профиле.</summary>
+    public string? Bio { get; set; }
+    /// <summary>Настройки оформления (тема, акцент, обои…) — JSON, которым владеет клиент; синхронизируется между устройствами.</summary>
+    public string? Appearance { get; set; }
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     /// <summary>Когда пользователь последний раз отключился (null — ещё не был в сети после обновления).</summary>
     public DateTime? LastSeenAt { get; set; }
@@ -46,6 +50,12 @@ public class Message
     public DateTime? DeletedAt { get; set; }
     /// <summary>Время последнего редактирования текста (null — не редактировалось).</summary>
     public DateTime? EditedAt { get; set; }
+    /// <summary>Сообщение, на которое это — ответ (в том же диалоге). Если оригинал удалён физически — null.</summary>
+    public string? ReplyToId { get; set; }
+    /// <summary>Автор оригинала, если сообщение переслано (сохраняется при повторной пересылке).</summary>
+    public string? ForwardedFromId { get; set; }
+    /// <summary>Имя автора оригинала на момент пересылки.</summary>
+    public string? ForwardedFromName { get; set; }
     public Dialog Dialog { get; set; } = null!;
     public User Sender { get; set; } = null!;
 }
@@ -68,4 +78,13 @@ public class RefreshToken
     public DateTime ExpiresAt { get; set; }
     public DateTime? RevokedAt { get; set; }
     public string? ReplacedById { get; set; }
+}
+
+/// <summary>Закреплённое сообщение диалога (общее для обоих участников).</summary>
+public class PinnedMessage
+{
+    public string DialogId { get; set; } = "";
+    public string MessageId { get; set; } = "";
+    public string PinnedById { get; set; } = "";
+    public DateTime PinnedAt { get; set; } = DateTime.UtcNow;
 }

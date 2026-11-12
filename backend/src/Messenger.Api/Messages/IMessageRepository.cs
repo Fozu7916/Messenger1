@@ -8,7 +8,10 @@ public sealed record NewMessage(
     string DialogId,
     string SenderId,
     string Text,
-    string? MediaUrl);
+    string? MediaUrl,
+    string? ReplyToId = null,
+    string? ForwardedFromId = null,
+    string? ForwardedFromName = null);
 
 public sealed record SaveResult(MessageDto Message, bool IsNew);
 
@@ -37,5 +40,14 @@ public interface IMessageRepository
     /// Полнотекстовый (подстрочный, без учёта регистра) поиск по сообщениям во всех диалогах пользователя
     /// или в одном из них. Результат — от новых к старым; <paramref name="before"/> — курсор для следующей страницы.
     /// </summary>
-    Task<IReadOnlyList<MessageDto>> SearchAsync(string userId, string query, string? dialogId, string? before, int limit, CancellationToken ct = default);
+    Task<IReadOnlyList<MessageDto>> SearchAsync(string userId, IReadOnlyList<string> tokens, string? dialogId, string? before, int limit, CancellationToken ct = default);
+
+    /// <summary>Существует ли неудалённое сообщение в диалоге (для ответов и закрепа).</summary>
+    Task<bool> ExistsInDialogAsync(string dialogId, string messageId, CancellationToken ct = default);
+
+    /// <summary>Сообщения диалога по id, видимые пользователю (не удалены, не скрыты у него), по возрастанию ULID.</summary>
+    Task<IReadOnlyList<MessageDto>> GetByIdsAsync(string dialogId, string userId, IReadOnlyCollection<string> ids, CancellationToken ct = default);
+
+    /// <summary>Закреплённые сообщения диалога, видимые пользователю; сначала закреплённые позже.</summary>
+    Task<IReadOnlyList<MessageDto>> GetPinnedAsync(string dialogId, string userId, CancellationToken ct = default);
 }

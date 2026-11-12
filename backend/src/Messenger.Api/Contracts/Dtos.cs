@@ -12,7 +12,23 @@ public sealed record MessageDto(
     string Text,
     string? MediaUrl,
     DateTime CreatedAt,
-    DateTime? EditedAt = null);
+    DateTime? EditedAt = null,
+    string? ReplyToId = null,
+    string? ForwardedFromId = null,
+    string? ForwardedFromName = null);
+
+public sealed record WallpaperDto(string Id);
+
+/// <summary>Профиль. IsOnline/LastSeenAt заполняются только для собеседников (с кем есть общий диалог).</summary>
+public sealed record ProfileDto(
+    string Id,
+    string Login,
+    string DisplayName,
+    string? AvatarUrl,
+    string? Bio,
+    DateTime CreatedAt,
+    bool? IsOnline = null,
+    DateTime? LastSeenAt = null);
 
 /// <summary>
 /// UnreadCount — сколько сообщений собеседника это пользователь ещё не прочитал.

@@ -6,6 +6,7 @@ namespace Messenger.Api.Hubs;
 public sealed class HubRateLimiter
 {
     private readonly ConcurrentDictionary<string, (long Start, int Count)> _w = new();
+    private long _nextSweep;
 
     public bool TryAcquire(string key, int limit, TimeSpan window)
     {
@@ -18,7 +19,9 @@ public sealed class HubRateLimiter
             if (e.Count >= limit) { allowed = false; return e; }
             return (e.Start, e.Count + 1);
         });
-        if (_w.Count > 50_000)
+        // чистим не чаще раза в минуту, иначе при большом словаре каждый вызов был бы O(n)
+        var next = Interlocked.Read(ref _nextSweep);
+        if (now >= next && Interlocked.CompareExchange(ref _nextSweep, now + 60_000, next) == next)
             foreach (var k in _w.Where(p => now - p.Value.Start > 600_000).Select(p => p.Key).ToList()) _w.TryRemove(k, out _);
         return allowed;
     }

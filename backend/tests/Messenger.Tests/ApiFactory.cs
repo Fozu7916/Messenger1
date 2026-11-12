@@ -1,7 +1,11 @@
 using Messenger.Api.Contracts;
+using Messenger.Api.Storage;
 using Microsoft.AspNetCore.Http.Connections;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.AspNetCore.SignalR.Client;
+using Microsoft.AspNetCore.TestHost;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Testcontainers.PostgreSql;
 
 namespace Messenger.Tests;
@@ -27,7 +31,10 @@ public sealed class ApiFactory : WebApplicationFactory<Program>, IAsyncLifetime
         builder.UseSetting("Jwt:Key", "test-key-test-key-test-key-test-key-1234");
         builder.UseSetting("Database:AutoMigrate", "true");
         builder.UseSetting("RateLimiting:AuthPerMinute", "100000");
+        builder.UseSetting("RateLimiting:UsersPerMinute", "100000");
         builder.UseSetting("Auth:RefreshGraceSeconds", "0");
+        // файловое хранилище в памяти: настоящий S3 в тестах API не нужен
+        builder.ConfigureTestServices(s => { s.RemoveAll<IFileStorage>(); s.AddSingleton<IFileStorage, InMemoryFileStorage>(); });
     }
 }
 

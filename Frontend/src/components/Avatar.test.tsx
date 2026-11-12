@@ -22,8 +22,8 @@ describe('Avatar: единая форма', () => {
     expect(html({ name: 'A' })).toMatch(/width:40px;height:40px/);
   });
 
-  it('CSS: круг, квадратные пропорции, фото заполняет круг без искажений', () => {
-    expect(rule('.ava')).toContain('border-radius:9999px');
+  it('CSS: скруглённый квадрат, квадратные пропорции, фото заполняет форму без искажений', () => {
+    expect(rule('.ava')).toContain('border-radius:30%');
     expect(rule('.ava')).toContain('aspect-ratio:1/1');
     expect(rule('.ava')).toContain('flex:none');   // не сжимается во flex-строке
     expect(rule('.ava img')).toMatch(/width:100%;height:100%/);

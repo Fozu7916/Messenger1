@@ -35,6 +35,28 @@ public sealed class UpdateProfileRequest
 
     [MaxLength(Messenger.Api.Contracts.AvatarUrl.MaxLength)]
     public string? AvatarUrl { get; init; }
+    /// <summary>null — не менять; пустая строка — очистить.</summary>
+    [MaxLength(300)]
+    public string? Bio { get; init; }
+}
+
+public sealed class ChangePasswordRequest
+{
+    [Required, MaxUtf8Bytes(72)]
+    public string CurrentPassword { get; init; } = "";
+    [Required, MinLength(8), MaxUtf8Bytes(72)]
+    public string NewPassword { get; init; } = "";
+}
+
+public sealed class ForwardRequest
+{
+    [Required, StringLength(26, MinimumLength = 26)]
+    public string ToDialogId { get; init; } = "";
+    [Required, MinLength(1), MaxLength(50)]
+    public List<string> MessageIds { get; init; } = [];
+    /// <summary>Ключ идемпотентности пачки: повтор с тем же значением не создаёт дублей.</summary>
+    [Required, StringLength(40, MinimumLength = 1)]
+    public string ClientBatchId { get; init; } = "";
 }
 
 public sealed class CreateDialogRequest

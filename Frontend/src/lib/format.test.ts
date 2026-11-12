@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { fmtLastSeen, initials, isHttpUrl, sortMessages } from './format';
+import { fmtLastSeen, initials, isHttpUrl, matchesAll, sortMessages } from './format';
 import type { MessageDoc } from '../types';
 
 const m = (id: string, createdAt: number): MessageDoc => ({
   clientMessageId: id || String(createdAt), id, dialogId: 'd', senderId: 'u', text: '',
-  createdAt, status: id ? 'sent' : 'pending', isDeleted: false, editedAt: 0,
+  createdAt, status: id ? 'sent' : 'pending', isDeleted: false, editedAt: 0, replyToId: '', fwdFrom: '',
 });
 
 describe('format', () => {
@@ -27,5 +27,18 @@ describe('format', () => {
     const list = [m('', 5), m('01B', 2), m('01A', 3), m('', 4)].sort(sortMessages);
     expect(list.map((x) => x.id)).toEqual(['01A', '01B', '', '']);
     expect(list[2].createdAt).toBe(4);
+  });
+});
+
+describe('matchesAll', () => {
+  it('ищет слова в любом порядке и без учёта регистра', () => {
+    expect(matchesAll('Иван Петров @ivan', 'пет ИВА')).toBe(true);
+    expect(matchesAll('Иван Петров', 'петров иван')).toBe(true);
+  });
+  it('требует каждое слово', () => {
+    expect(matchesAll('Иван Петров', 'иван сидоров')).toBe(false);
+  });
+  it('пустой запрос подходит всему', () => {
+    expect(matchesAll('что угодно', '   ')).toBe(true);
   });
 });
