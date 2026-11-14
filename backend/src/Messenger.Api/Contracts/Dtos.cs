@@ -15,7 +15,11 @@ public sealed record MessageDto(
     DateTime? EditedAt = null,
     string? ReplyToId = null,
     string? ForwardedFromId = null,
-    string? ForwardedFromName = null);
+    string? ForwardedFromName = null,
+    string Kind = "text",
+    int? MediaWidth = null,
+    int? MediaHeight = null,
+    int? MediaDurationMs = null);
 
 public sealed record WallpaperDto(string Id);
 
@@ -40,4 +44,10 @@ public sealed record DialogDto(
     UserDto? Peer,
     MessageDto? LastMessage,
     int UnreadCount = 0,
-    string? PeerLastReadId = null);
+    string? PeerLastReadId = null,
+    string Kind = "direct",
+    string? Title = null,
+    int MemberCount = 2,
+    string MyRole = "member");
+
+public sealed record MemberDto(UserDto User, string Role);

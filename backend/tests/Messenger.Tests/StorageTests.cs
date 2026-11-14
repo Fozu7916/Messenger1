@@ -1,12 +1,10 @@
 using Messenger.Api.Storage;
-using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Messenger.Tests;
 
 /// <summary>Файловое хранилище: поведение без настроек и (по желанию) живая проверка против настоящего S3.</summary>
-[Collection(ApiCollection.Name)]
-public sealed class StorageTests(ApiFactory factory)
+public sealed class StorageTests
 {
     [Theory]
     [InlineData("", "key", "secret", false)]

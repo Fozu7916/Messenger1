@@ -6,12 +6,17 @@ using Messenger.Api.Messages;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.RateLimiting;
+using Messenger.Api.Hubs;
+using Messenger.Api.Media;
+using Messenger.Api.Storage;
+using Microsoft.AspNetCore.SignalR;
 using Microsoft.EntityFrameworkCore;
 
 namespace Messenger.Api.Controllers;
 
 [ApiController, Route("api/dialogs"), Authorize, EnableRateLimiting("users")]
-public sealed class DialogsController(AppDbContext db, IMessageRepository messages) : ControllerBase
+public sealed class DialogsController(AppDbContext db, IMessageRepository messages, IDialogAccess access, IFileStorage storage,
+    IHubContext<ChatHub> hub, ILogger<DialogsController> log) : ControllerBase
 {
     [HttpGet]
     public async Task<ActionResult<List<DialogDto>>> List(CancellationToken ct)
@@ -24,13 +29,18 @@ public sealed class DialogsController(AppDbContext db, IMessageRepository messag
             {
                 d.Id,
                 d.CreatedAt,
+                d.Kind,
+                d.Title,
+                d.AvatarUrl,
+                MemberCount = d.Members.Count,
+                MyRole = d.Members.Where(m => m.UserId == me).Select(m => m.Role).FirstOrDefault(),
                 Peer = d.Members.Where(m => m.UserId != me)
                     .Select(m => new { m.User.Id, m.User.Login, m.User.DisplayName, m.User.AvatarUrl })
                     .FirstOrDefault(),
                 PeerRead = d.Members.Where(m => m.UserId != me).Select(m => m.LastReadId).FirstOrDefault(),
                 Last = d.Messages.Where(m => m.DeletedAt == null && !db.MessageHides.Any(h => h.MessageId == m.Id && h.UserId == me))
                     .OrderByDescending(m => m.Id)
-                    .Select(m => new { m.Id, m.ClientMessageId, m.DialogId, m.SenderId, m.Text, m.MediaUrl, m.CreatedAt, m.EditedAt, m.ReplyToId, m.ForwardedFromId, m.ForwardedFromName })
+                    .Select(m => new { m.Id, m.ClientMessageId, m.DialogId, m.SenderId, m.Text, m.MediaUrl, m.CreatedAt, m.EditedAt, m.ReplyToId, m.ForwardedFromId, m.ForwardedFromName, m.Kind, m.MediaWidth, m.MediaHeight, m.MediaDurationMs })
                     .FirstOrDefault(),
             })
             .ToListAsync(ct);
@@ -41,12 +51,15 @@ public sealed class DialogsController(AppDbContext db, IMessageRepository messag
             .Select(r => new DialogDto(
                 r.Id,
                 r.CreatedAt,
-                r.Peer is null ? null : new UserDto(r.Peer.Id, r.Peer.Login, r.Peer.DisplayName, r.Peer.AvatarUrl),
+                // у беседы «собеседник» синтетический (id = id беседы, имя = название): так весь интерфейс показывает название и аватар без особых случаев
+                r.Kind == "group" ? new UserDto(r.Id, "", r.Title ?? "Беседа", r.AvatarUrl)
+                    : r.Peer is null ? null : new UserDto(r.Peer.Id, r.Peer.Login, r.Peer.DisplayName, r.Peer.AvatarUrl),
                 r.Last is null ? null : new MessageDto(r.Last.Id, r.Last.ClientMessageId, r.Last.DialogId,
                     r.Last.SenderId, r.Last.Text, r.Last.MediaUrl, r.Last.CreatedAt, r.Last.EditedAt,
-                    r.Last.ReplyToId, r.Last.ForwardedFromId, r.Last.ForwardedFromName),
+                    r.Last.ReplyToId, r.Last.ForwardedFromId, r.Last.ForwardedFromName, r.Last.Kind, r.Last.MediaWidth, r.Last.MediaHeight, r.Last.MediaDurationMs),
                 unread.TryGetValue(r.Id, out var n) ? n : 0,
-                r.PeerRead))
+                r.Kind == "group" ? null : r.PeerRead,
+                r.Kind, r.Title, r.MemberCount, r.MyRole ?? "member"))
             .OrderByDescending(d => d.LastMessage?.CreatedAt ?? d.CreatedAt)
             .ToList();
     }
@@ -68,7 +81,7 @@ public sealed class DialogsController(AppDbContext db, IMessageRepository messag
         if (peer is null) return NotFound();
 
         var existing = await db.Dialogs.AsNoTracking()
-            .Where(d => d.Members.Any(m => m.UserId == me) && d.Members.Any(m => m.UserId == req.UserId))
+            .Where(d => d.Kind == "direct" && d.Members.Any(m => m.UserId == me) && d.Members.Any(m => m.UserId == req.UserId))
             .FirstOrDefaultAsync(ct);
         if (existing is not null)
             return Ok(new DialogDto(existing.Id, existing.CreatedAt, peer, null));
@@ -106,9 +119,16 @@ public sealed class DialogsController(AppDbContext db, IMessageRepository messag
     public async Task<IActionResult> Delete(string id, CancellationToken ct)
     {
         var me = User.GetUserId();
-        var deleted = await db.Dialogs
-            .Where(d => d.Id == id && d.Members.Any(m => m.UserId == me))
-            .ExecuteDeleteAsync(ct);
-        return deleted == 0 ? NotFound() : NoContent();
+        var info = await db.Dialogs.AsNoTracking().Where(d => d.Id == id && d.Members.Any(m => m.UserId == me))
+            .Select(d => new { d.Kind, Role = d.Members.Where(m => m.UserId == me).Select(m => m.Role).First() })
+            .FirstOrDefaultAsync(ct);
+        if (info is null) return NotFound();
+        if (info.Kind == "group" && info.Role != "owner")
+            return Problem(statusCode: StatusCodes.Status403Forbidden, title: "Only the owner can delete a group; leave it instead");
+        var members = await access.GetMemberIdsAsync(id, ct);
+        await db.Dialogs.Where(d => d.Id == id).ExecuteDeleteAsync(ct);
+        await storage.DeleteDialogMediaAsync(id, log);
+        await hub.Clients.Users(members).SendAsync("DialogsChanged", ct);   // у остальных диалог исчезает сразу, а не при следующей синхронизации
+        return NoContent();
     }
 }

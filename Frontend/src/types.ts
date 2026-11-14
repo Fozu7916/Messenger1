@@ -12,11 +12,22 @@ export interface MessageDto {
   replyToId?: string | null;          // ответ на сообщение этого же диалога
   forwardedFromId?: string | null;    // автор оригинала, если сообщение переслано
   forwardedFromName?: string | null;  // его имя на момент пересылки
+  kind?: string;                      // text | image | voice | system (служебное: «Анна добавила Марка»)
+  mediaUrl?: string | null;           // путь к фото или голосовому (отдаётся только участникам, по токену)
+  mediaWidth?: number | null;
+  mediaHeight?: number | null;
+  mediaDurationMs?: number | null;
 }
+
+export interface Member { user: User; role: string }   // role: owner | member
 export interface DialogDto {
   id: string; createdAt: string; peer: User; lastMessage: MessageDto | null;
   unreadCount: number;              // сколько сообщений собеседника я ещё не прочитал
   peerLastReadId: string | null;    // ULID последнего моего сообщения, которое прочитал собеседник
+  kind?: 'direct' | 'group';        // у беседы peer — синтетический: id = id беседы, имя = название, аватар = аватар беседы
+  title?: string | null;
+  memberCount?: number;
+  myRole?: string;
 }
 
 // Документы локальной БД (RxDB)
@@ -31,10 +42,18 @@ export interface MessageDoc {
   editedAt: number;        // когда изменено; 0 — не менялось
   replyToId: string;       // серверный ULID сообщения, на которое это ответ; '' — не ответ
   fwdFrom: string;         // имя автора оригинала, если сообщение переслано; '' — не пересланное
+  kind: string;            // text | image | voice | system
+  media: string;           // путь вложения на сервере (или blob: до отправки); '' — нет
+  mw: number;              // размеры фото (для заглушки до загрузки)
+  mh: number;
+  dur: number;             // длительность голосового, мс
 }
 export interface PeerDoc { id: string; login: string; displayName: string; avatarUrl: string }
 export interface DialogDoc {
   id: string; createdAt: number; peer: PeerDoc; unread: number;
   peerRead: string;        // ULID последнего сообщения, прочитанного собеседником; '' — ничего
   pending: boolean;        // true — диалог создан локально и ещё не создан на сервере
+  kind: string;            // direct | group
+  memberCount: number;
+  myRole: string;          // owner | member
 }

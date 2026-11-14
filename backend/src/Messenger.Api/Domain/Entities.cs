@@ -23,6 +23,12 @@ public class Dialog
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     /// <summary>"меньшийId:большийId" — уникальный ключ пары, защищает от дублей при параллельном создании.</summary>
     public string? PairKey { get; set; }
+    /// <summary>"direct" — личный диалог (двое), "group" — беседа.</summary>
+    public string Kind { get; set; } = "direct";
+    public string? Title { get; set; }
+    /// <summary>Аватар беседы: путь вида /api/files/group-avatars/{dialogId}/{ulid}.webp.</summary>
+    public string? AvatarUrl { get; set; }
+    public string? CreatedById { get; set; }
     public List<DialogMember> Members { get; } = [];
     public List<Message> Messages { get; } = [];
 }
@@ -32,6 +38,8 @@ public class DialogMember
     public string DialogId { get; set; } = "";
     public string UserId { get; set; } = "";
     public DateTime JoinedAt { get; set; } = DateTime.UtcNow;
+    /// <summary>"owner" (создатель; при его уходе роль переходит к самому раннему участнику) или "member".</summary>
+    public string Role { get; set; } = "member";
     /// <summary>ULID последнего сообщения собеседника, прочитанного этим участником (null — ничего не прочитано).</summary>
     public string? LastReadId { get; set; }
     public Dialog Dialog { get; set; } = null!;
@@ -56,6 +64,11 @@ public class Message
     public string? ForwardedFromId { get; set; }
     /// <summary>Имя автора оригинала на момент пересылки.</summary>
     public string? ForwardedFromName { get; set; }
+    /// <summary>"text", "image", "voice" или "system" (служебное: «Анна добавила Марка»).</summary>
+    public string Kind { get; set; } = "text";
+    public int? MediaWidth { get; set; }
+    public int? MediaHeight { get; set; }
+    public int? MediaDurationMs { get; set; }
     public Dialog Dialog { get; set; } = null!;
     public User Sender { get; set; } = null!;
 }

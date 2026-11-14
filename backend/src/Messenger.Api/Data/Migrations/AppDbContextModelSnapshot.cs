@@ -39,6 +39,27 @@ namespace Messenger.Api.Data.Migrations
                         .HasColumnType("character varying(64)")
                         .HasColumnName("pair_key");
 
+                    b.Property<string>("Kind")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasMaxLength(10)
+                        .HasColumnType("character varying(10)")
+                        .HasDefaultValue("direct")
+                        .HasColumnName("kind");
+                    b.Property<string>("Title")
+                        .HasMaxLength(80)
+                        .HasColumnType("character varying(80)")
+                        .HasColumnName("title");
+                    b.Property<string>("AvatarUrl")
+                        .HasMaxLength(2048)
+                        .HasColumnType("character varying(2048)")
+                        .HasColumnName("avatar_url");
+                    b.Property<string>("CreatedById")
+                        .HasMaxLength(26)
+                        .HasColumnType("character varying(26)")
+                        .HasColumnName("created_by_id")
+                        .UseCollation("C");
+
                     b.HasKey("Id")
                         .HasName("pk_dialogs");
 
@@ -72,6 +93,14 @@ namespace Messenger.Api.Data.Migrations
                         .HasColumnType("character varying(26)")
                         .HasColumnName("last_read_id")
                         .UseCollation("C");
+
+                    b.Property<string>("Role")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasMaxLength(10)
+                        .HasColumnType("character varying(10)")
+                        .HasDefaultValue("member")
+                        .HasColumnName("role");
 
                     b.HasKey("DialogId", "UserId")
                         .HasName("pk_dialog_members");
@@ -151,6 +180,23 @@ namespace Messenger.Api.Data.Migrations
                         .HasMaxLength(4000)
                         .HasColumnType("character varying(4000)")
                         .HasColumnName("text");
+
+                    b.Property<string>("Kind")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasMaxLength(10)
+                        .HasColumnType("character varying(10)")
+                        .HasDefaultValue("text")
+                        .HasColumnName("kind");
+                    b.Property<int?>("MediaWidth")
+                        .HasColumnType("integer")
+                        .HasColumnName("media_width");
+                    b.Property<int?>("MediaHeight")
+                        .HasColumnType("integer")
+                        .HasColumnName("media_height");
+                    b.Property<int?>("MediaDurationMs")
+                        .HasColumnType("integer")
+                        .HasColumnName("media_duration_ms");
 
                     b.HasKey("Id")
                         .HasName("pk_messages");

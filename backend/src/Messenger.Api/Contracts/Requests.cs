@@ -78,3 +78,36 @@ public sealed class MaxUtf8BytesAttribute(int max) : ValidationAttribute($"Па�
 {
     public override bool IsValid(object? value) => value is not string s || System.Text.Encoding.UTF8.GetByteCount(s) <= max;
 }
+
+public sealed class CreateGroupRequest
+{
+    [Required, StringLength(80, MinimumLength = 1)]
+    public string Title { get; init; } = "";
+    [Required, MinLength(1), MaxLength(49)]
+    public List<string> MemberIds { get; init; } = [];
+}
+
+public sealed class RenameGroupRequest
+{
+    [Required, StringLength(80, MinimumLength = 1)]
+    public string Title { get; init; } = "";
+}
+
+public sealed class AddMembersRequest
+{
+    [Required, MinLength(1), MaxLength(49)]
+    public List<string> UserIds { get; init; } = [];
+}
+
+/// <summary>Фото или голосовое сообщение (multipart/form-data).</summary>
+public sealed class SendMediaForm
+{
+    [Required] public IFormFile File { get; init; } = null!;
+    [Required, StringLength(64, MinimumLength = 1)] public string ClientMessageId { get; init; } = "";
+    /// <summary>"image" или "voice".</summary>
+    [Required] public string Kind { get; init; } = "";
+    [MaxLength(1000)] public string? Text { get; init; }
+    /// <summary>Длительность голосового в миллисекундах (от клиента; ограничивается 0–10 минут).</summary>
+    public int? DurationMs { get; init; }
+    public string? ReplyToId { get; init; }
+}

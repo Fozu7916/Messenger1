@@ -2,7 +2,9 @@ using Messenger.Api.Auth;
 using Messenger.Api.Contracts;
 using Messenger.Api.Data;
 using Messenger.Api.Hubs;
+using Messenger.Api.Media;
 using Messenger.Api.Messages;
+using Messenger.Api.Storage;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.RateLimiting;
@@ -15,8 +17,10 @@ namespace Messenger.Api.Controllers;
 public sealed class MessagesController(
     AppDbContext db,
     IMessageRepository messages,
+    IFileStorage storage,
     IDialogAccess access,
-    IHubContext<ChatHub> hub) : ControllerBase
+    IHubContext<ChatHub> hub,
+    ILogger<MessagesController> log) : ControllerBase
 {
     /// <summary>
     /// История и дельта-синхронизация. Всегда возвращает сообщения по возрастанию ULID.
@@ -93,7 +97,7 @@ public sealed class MessagesController(
         }
 
         var dto = new MessageDto(msg.Id, msg.ClientMessageId, msg.DialogId, msg.SenderId, msg.Text, msg.MediaUrl, msg.CreatedAt, msg.EditedAt,
-            msg.ReplyToId, msg.ForwardedFromId, msg.ForwardedFromName);
+            msg.ReplyToId, msg.ForwardedFromId, msg.ForwardedFromName, msg.Kind, msg.MediaWidth, msg.MediaHeight, msg.MediaDurationMs);
         if (changed)
         {
             var members = await access.GetMemberIdsAsync(msg.DialogId, ct);
@@ -133,6 +137,11 @@ public sealed class MessagesController(
         await db.Messages.Where(m => m.Id == id)
             .ExecuteUpdateAsync(s => s.SetProperty(m => m.DeletedAt, (DateTime?)DateTime.UtcNow), ct);
         var unpinned = await db.PinnedMessages.Where(p => p.MessageId == id).ExecuteDeleteAsync(ct);
+        if (MediaKeys.Parse(await db.Messages.Where(m => m.Id == id).Select(m => m.MediaUrl).FirstOrDefaultAsync(ct)) is { } media)
+        {
+            try { await storage.DeleteAsync(MediaKeys.Key(media.DialogId, media.Name), ct); }   // вложение удаляем вместе с сообщением
+            catch (Exception ex) { log.LogWarning(ex, "Could not delete media of message {Id}", id); }
+        }
         var members = await access.GetMemberIdsAsync(dialogId, ct);
         if (unpinned > 0) await hub.Clients.Users(members).SendAsync("MessageUnpinned", dialogId, id, ct);
         await hub.Clients.Users(members).SendAsync("MessageDeleted", dialogId, id, ct);
@@ -207,6 +216,7 @@ public sealed class MessagesController(
             return Problem(statusCode: StatusCodes.Status400BadRequest, title: "messageIds must be valid ULIDs");
         var source = await messages.GetByIdsAsync(dialogId, me, ids, ct);
         if (source.Count != ids.Count) return NotFound();
+        if (source.Any(m => m.Kind == "system")) return Problem(statusCode: StatusCodes.Status400BadRequest, title: "System messages cannot be forwarded");
 
         var authorIds = source.Where(m => m.ForwardedFromId is null).Select(m => m.SenderId).Distinct().ToList();
         var names = await db.Users.AsNoTracking().Where(u => authorIds.Contains(u.Id)).ToDictionaryAsync(u => u.Id, u => u.DisplayName, ct);
@@ -222,18 +232,103 @@ public sealed class MessagesController(
             do { id = Ulid.NewUlid().ToString(); } while (prev is not null && string.CompareOrdinal(id, prev) <= 0);
             prev = id;
 
+            string? mediaUrl = null;
+            if (MediaKeys.Parse(m.MediaUrl) is { } src)
+            {
+                var ext = Path.GetExtension(src.Name).TrimStart('.');
+                var newName = $"{id}.{ext}";
+                try
+                {
+                    await using var file = await storage.GetAsync(MediaKeys.Key(src.DialogId, src.Name), ct);
+                    if (file is not null)
+                    {
+                        var copy = new MemoryStream();
+                        await file.Content.CopyToAsync(copy, ct);
+                        copy.Position = 0;
+                        await storage.PutAsync(MediaKeys.Key(req.ToDialogId, newName), copy, copy.Length, MediaKeys.ContentType(ext), ct);
+                        mediaUrl = MediaKeys.Url(req.ToDialogId, newName);   // у копии свой файл: удаление оригинала её не ломает
+                    }
+                }
+                catch (StorageNotConfiguredException) { return Problem(statusCode: StatusCodes.Status503ServiceUnavailable, title: "File storage is not available"); }
+            }
             var saved = await messages.SaveAsync(new NewMessage(
                 Id: id,
                 ClientMessageId: $"{req.ClientBatchId}:{i}",
                 DialogId: req.ToDialogId,
                 SenderId: me,
                 Text: m.Text,
-                MediaUrl: m.MediaUrl,
+                MediaUrl: mediaUrl,
+                Kind: mediaUrl is null ? "text" : m.Kind,
+                MediaWidth: mediaUrl is null ? null : m.MediaWidth,
+                MediaHeight: mediaUrl is null ? null : m.MediaHeight,
+                MediaDurationMs: mediaUrl is null ? null : m.MediaDurationMs,
                 ForwardedFromId: m.ForwardedFromId ?? m.SenderId,
                 ForwardedFromName: m.ForwardedFromName ?? (names.TryGetValue(m.SenderId, out var n) ? n : null)), ct);
             result.Add(saved.Message);
             if (saved.IsNew) await hub.Clients.Users(members).SendAsync("MessageReceived", saved.Message, ct);
         }
         return Ok(result);
+    }
+
+    private const int MaxMediaUpload = 10 * 1024 * 1024;
+    private const int MaxVoiceBytes = 3 * 1024 * 1024;
+
+    /// <summary>
+    /// Фото или голосовое сообщение (multipart): file, clientMessageId, kind = image|voice, text (подпись), durationMs, replyToId.
+    /// Фото декодируется и перекодируется в WebP до 1600 px, голосовое проверяется по первым байтам (webm/ogg/m4a/mp3, до 3 МБ).
+    /// Идемпотентно по clientMessageId. Участникам уходит MessageReceived.
+    /// </summary>
+    [HttpPost("api/dialogs/{dialogId}/messages/media"), RequestSizeLimit(MaxMediaUpload), RequestFormLimits(MultipartBodyLengthLimit = MaxMediaUpload)]
+    public async Task<ActionResult<MessageDto>> SendMedia(string dialogId, [FromForm] SendMediaForm form, CancellationToken ct)
+    {
+        var me = User.GetUserId();
+        if (!await access.IsMemberAsync(dialogId, me, ct)) return NotFound();
+        if (form.Kind is not ("image" or "voice") || form.File.Length == 0 || form.File.Length > (form.Kind == "voice" ? MaxVoiceBytes : MaxMediaUpload))
+            return Problem(statusCode: StatusCodes.Status400BadRequest, title: "Send an image (up to 10 MB) or a voice message (up to 3 MB)");
+        if (form.ReplyToId is not null && (!Ulid.TryParse(form.ReplyToId, out _) || !await messages.ExistsInDialogAsync(dialogId, form.ReplyToId, ct)))
+            return Problem(statusCode: StatusCodes.Status400BadRequest, title: "invalid_reply_to");
+
+        byte[] data; string ext, contentType; int? w = null, h = null, duration = null;
+        try
+        {
+            await using var s = form.File.OpenReadStream();
+            if (form.Kind == "image")
+            {
+                var photo = await Task.Run(() => ImageProcessor.Photo(s), ct);
+                (data, w, h, ext, contentType) = (photo.Data, photo.Width, photo.Height, "webp", "image/webp");
+            }
+            else
+            {
+                var ms = new MemoryStream();
+                await s.CopyToAsync(ms, ct);
+                data = ms.ToArray();
+                if (VoiceFormat.Detect(data) is not { } fmt)
+                    return Problem(statusCode: StatusCodes.Status400BadRequest, title: "Unsupported audio format");
+                (ext, contentType) = fmt;
+                duration = Math.Clamp(form.DurationMs ?? 0, 0, 600_000);
+            }
+        }
+        catch (InvalidImageException)
+        {
+            return Problem(statusCode: StatusCodes.Status400BadRequest, title: "Unsupported or corrupted image (JPEG, PNG, WebP or GIF)");
+        }
+
+        var id = Ulid.NewUlid().ToString();
+        var name = $"{id}.{ext}";
+        var key = MediaKeys.Key(dialogId, name);
+        try { await storage.PutAsync(key, new MemoryStream(data), data.Length, contentType, ct); }
+        catch (StorageNotConfiguredException) { return Problem(statusCode: StatusCodes.Status503ServiceUnavailable, title: "File storage is not available"); }
+
+        var saved = await messages.SaveAsync(new NewMessage(
+            Id: id, ClientMessageId: form.ClientMessageId, DialogId: dialogId, SenderId: me, Text: (form.Text ?? "").Trim(),
+            MediaUrl: MediaKeys.Url(dialogId, name), ReplyToId: form.ReplyToId,
+            Kind: form.Kind, MediaWidth: w, MediaHeight: h, MediaDurationMs: duration), ct);
+        if (!saved.IsNew)
+        {
+            await storage.DeleteAsync(key, ct);   // повтор того же запроса: лишний файл не оставляем
+            return Ok(saved.Message);
+        }
+        await hub.Clients.Users(await access.GetMemberIdsAsync(dialogId, ct)).SendAsync("MessageReceived", saved.Message, ct);
+        return Ok(saved.Message);
     }
 }

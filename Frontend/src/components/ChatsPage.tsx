@@ -2,13 +2,20 @@ import { createPortal } from 'react-dom';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent as RMouseEvent, type ReactNode, type TouchEvent as RTouchEvent } from 'react';
 import * as api from '../lib/api';
 import { useAuth } from '../lib/auth';
-import { useChat, useLiveQuery } from '../lib/chat';
+import { previewOf, useChat, useLiveQuery } from '../lib/chat';
 import { fmtDay, fmtLastSeen, fmtTime, matchesAll, sortMessages } from '../lib/format';
+import { canRecord, useVoiceRecorder } from '../lib/media';
 import { readScroll, saveScroll, usePersisted } from '../lib/persist';
 import type { DialogDoc, MessageDoc } from '../types';
+import { GroupInfo, NewGroupModal, membersLabel } from './GroupModals';
+import { fmtDuration, ImageBubble, Lightbox, VoicePlayer } from './MediaBits';
 import { PeerProfile, Modal } from './modals';
 import { Avatar, useToast } from './ui';
 
+const Plus = () => <svg className="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg>;
+const Clip = () => <svg className="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11.5l-7.8 7.8a5 5 0 01-7-7l8.2-8.2a3.3 3.3 0 014.7 4.7L10 17a1.7 1.7 0 01-2.4-2.4l7-7" /></svg>;
+const Mic = () => <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3" /><path d="M5.5 11a6.5 6.5 0 0013 0M12 17.5V21" /></svg>;
+const hue = (s: string) => { let h = 0; for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0; return String(h % 360); };
 const Search = () => <svg className="ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7" /><path d="M20 20l-3.5-3.5" /></svg>;
 const Trash = () => <svg className="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 12a2 2 0 002 2h6a2 2 0 002-2l1-12M9 7V4h6v3" /></svg>;
 const Dots = () => <svg className="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h.01M12 12h.01M19 12h.01" /></svg>;
@@ -120,7 +127,7 @@ function ForwardModal({ msg, onClose, onDone }: { msg: MessageDoc; onClose: () =
         {shown.map((d) => (
           <button key={d.id} className="row" disabled={busy} onClick={() => pick(d)}>
             <Avatar name={d.peer.displayName} url={d.peer.avatarUrl} />
-            <div className="t"><div className="n">{d.peer.displayName}</div><div className="m"><span>@{d.peer.login}</span></div></div>
+            <div className="t"><div className="n">{d.peer.displayName}</div><div className="m"><span>{d.kind === 'group' ? 'Беседа' : '@' + d.peer.login}</span></div></div>
           </button>
         ))}
         {!shown.length && <div className="empty">Диалогов не найдено.</div>}
@@ -137,6 +144,7 @@ export function ChatsPage({ onFindPeople }: { onFindPeople: (q: string) => void 
   const { db, presence, renamed } = useChat();
   const [activeId, setActiveId] = usePersisted<string | null>('dialog', null);
   const [q, setQ] = useState('');
+  const [newGroup, setNewGroup] = useState(false);
   const dialogs = useLiveQuery<DialogDoc>((d) => d.dialogs.find(), []);
   const msgs = useLiveQuery<MessageDoc>((d) => d.messages.find({ selector: { isDeleted: false } }), []);
   const rows = useMemo(() => {
@@ -157,7 +165,10 @@ export function ChatsPage({ onFindPeople }: { onFindPeople: (q: string) => void 
   return (
     <div className={'main ' + (active ? 'open' : '')}>
       <aside className="side">
-        <h3>Чаты</h3>
+        <div className="side-head">
+          <h3>Чаты</h3>
+          <button className="icbtn" onClick={() => setNewGroup(true)} aria-label="Новая беседа" title="Новая беседа"><Plus /></button>
+        </div>
         <input className="field search" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Имя или логин собеседника" aria-label="Поиск по собеседникам" />
         <div className="list">
           {shownRows.map(({ d, last }) => (
@@ -166,7 +177,7 @@ export function ChatsPage({ onFindPeople }: { onFindPeople: (q: string) => void 
               <div className="t">
                 <div className="n">{d.peer.displayName}<small>{last ? fmtTime(last.createdAt) : ''}</small></div>
                 <div className="m">
-                  <span>{last ? (last.senderId === me ? 'Вы: ' : '') + last.text : 'Новый диалог'}</span>
+                  <span>{last ? (last.senderId === me ? 'Вы: ' : '') + previewOf(last) : 'Новый диалог'}</span>
                   {d.unread > 0 && <b className="badge">{d.unread}</b>}
                 </div>
               </div>
@@ -181,6 +192,7 @@ export function ChatsPage({ onFindPeople }: { onFindPeople: (q: string) => void 
         {active ? <ChatView key={active.id} dialog={active} onClose={() => setActiveId(null)} />
           : <div className="blank"><div><h2>Выберите диалог</h2><p>Или найдите собеседника в разделе «Люди».</p></div></div>}
       </section>
+      {newGroup && <NewGroupModal onClose={() => setNewGroup(false)} onCreated={(id) => { setNewGroup(false); setActiveId(id); }} />}
     </div>
   );
 }
@@ -189,7 +201,7 @@ interface MenuState { x: number; y: number; m: MessageDoc; sel: string }
 
 function ChatView({ dialog, onClose }: { dialog: DialogDoc; onClose: () => void }) {
   const { session } = useAuth();
-  const { status, typing, presence, lastSeen, pins, send, retry, remove, edit, setPinned, loadPins, removeDialog, loadOlder, notifyTyping, setActive } = useChat();
+  const { status, typing, typingUser, members, loadMembers, sendMedia, presence, lastSeen, pins, send, retry, remove, edit, setPinned, loadPins, removeDialog, loadOlder, notifyTyping, setActive } = useChat();
   const toast = useToast();
   const me = session!.user.id;
   const raw = useLiveQuery<MessageDoc>((d) => d.messages.find({ selector: { dialogId: dialog.id } }), [dialog.id]);
@@ -207,6 +219,13 @@ function ChatView({ dialog, onClose }: { dialog: DialogDoc; onClose: () => void 
   const [menu, setMenu] = useState<MenuState | null>(null);
   const [fwd, setFwd] = useState<MessageDoc | null>(null);
   const [profile, setProfile] = useState(false);
+  const [groupInfo, setGroupInfo] = useState(false);
+  const [lightbox, setLightbox] = useState<string | null>(null);
+  const [hasText, setHasText] = useState(false);
+  const fileIn = useRef<HTMLInputElement>(null);
+  const voice = useVoiceRecorder();
+  const isGroup = dialog.kind === 'group';
+  const nameOf = (uid: string) => uid === me ? 'Вы' : members[dialog.id]?.find((x) => x.user.id === uid)?.user.displayName ?? (isGroup ? 'Участник' : dialog.peer.displayName);
   const [pinIdx, setPinIdx] = useState(0);
   const [showDown, setShowDown] = useState(false);
   const [findOpen, setFindOpen] = useState(false);
@@ -220,6 +239,7 @@ function ChatView({ dialog, onClose }: { dialog: DialogDoc; onClose: () => void 
   const isTyping = !!typing[dialog.id];
   const pinned = (pins[dialog.id] ?? []).map((id) => byId.get(id)).filter((m): m is MessageDoc => !!m);
   useEffect(() => { setActive(dialog.id); return () => setActive(null); }, [dialog.id]);
+  useEffect(() => { if (isGroup) loadMembers(dialog.id).catch(() => {}); }, [dialog.id, status === 'online']);
   useEffect(() => { loadPins(dialog.id).catch((e) => console.warn('pins load failed', e)); }, [dialog.id, status === 'online']);
   // позиция в истории: восстановление, «прилипание» к низу, сохранение якоря при подгрузке вверх
   useLayoutEffect(() => {
@@ -310,8 +330,8 @@ function ChatView({ dialog, onClose }: { dialog: DialogDoc; onClose: () => void 
     }
   };
   const resize = () => { const el = ta.current!; el.style.height = 'auto'; el.style.height = Math.min(el.scrollHeight, 140) + 'px'; };
-  const cancelEdit = () => { setEditing(null); const el = ta.current!; el.value = ''; el.style.height = ''; };
-  const startEdit = (m: MessageDoc) => { setReplying(null); setEditing(m); const el = ta.current!; el.value = m.text; resize(); el.focus(); };
+  const cancelEdit = () => { setEditing(null); setHasText(false); const el = ta.current!; el.value = ''; el.style.height = ''; };
+  const startEdit = (m: MessageDoc) => { setReplying(null); setEditing(m); setHasText(true); const el = ta.current!; el.value = m.text; resize(); el.focus(); };
   const startReply = (m: MessageDoc) => { if (editing) cancelEdit(); setReplying(m); ta.current!.focus(); };
   const submit = () => {
     const t = ta.current!.value.trim(); if (!t) return;
@@ -321,8 +341,24 @@ function ChatView({ dialog, onClose }: { dialog: DialogDoc; onClose: () => void 
     }
     send(dialog.id, t.slice(0, 4000), replying?.id || undefined);
     setReplying(null);
-    ta.current!.value = ''; ta.current!.style.height = ''; stick.current = true;
+    ta.current!.value = ''; ta.current!.style.height = ''; stick.current = true; setHasText(false);
   };
+  const sendImage = (f?: File | null) => {
+    if (fileIn.current) fileIn.current.value = '';
+    if (!f) return;
+    if (!f.type.startsWith('image/')) { toast('Это не картинка'); return; }
+    if (f.size > 10 * 1024 * 1024) { toast('Файл больше 10 МБ'); return; }
+    sendMedia(dialog.id, 'image', f, { text: ta.current!.value.trim().slice(0, 1000), replyToId: replying?.id || undefined });   // подпись — набранный текст
+    ta.current!.value = ''; ta.current!.style.height = ''; setHasText(false); setReplying(null); stick.current = true;
+  };
+  const startVoice = async () => { try { await voice.start(); } catch { toast('Нет доступа к микрофону — разрешите его в настройках браузера'); } };
+  const sendVoice = async () => {
+    const r = await voice.finish();
+    if (!r) { toast('Запись слишком короткая'); return; }
+    sendMedia(dialog.id, 'voice', r.blob, { durationMs: r.durationMs, replyToId: replying?.id || undefined });
+    setReplying(null); stick.current = true;
+  };
+  useEffect(() => { if (voice.seconds >= 300) void sendVoice(); }, [voice.seconds]);   // запись не длиннее 5 минут
   const delDialogNow = () => {
     setDelDialog(false);
     removeDialog(dialog.id).then(() => { onClose(); toast('Диалог удалён у обоих участников'); }).catch((e) => toast(e.message));
@@ -344,8 +380,8 @@ function ChatView({ dialog, onClose }: { dialog: DialogDoc; onClose: () => void 
     const isPinned = (pins[dialog.id] ?? []).includes(m.id);
     const items: MenuItem[] = [];
     if (sent) items.push({ label: 'Ответить', onClick: () => startReply(m) });
-    items.push({ label: sel ? 'Копировать выделенное' : 'Копировать', onClick: () => { void copyText(sel || m.text).then(() => toast('Скопировано')); } });
-    if (m.senderId === me && m.status !== 'failed') items.push({ label: 'Изменить', onClick: () => startEdit(m) });
+    if (m.text) items.push({ label: sel ? 'Копировать выделенное' : 'Копировать', onClick: () => { void copyText(sel || m.text).then(() => toast('Скопировано')); } });
+    if (m.senderId === me && m.status !== 'failed' && (m.kind ?? 'text') === 'text') items.push({ label: 'Изменить', onClick: () => startEdit(m) });
     if (sent) {
       items.push({ label: isPinned ? 'Открепить' : 'Закрепить', onClick: () => togglePin(m, !isPinned) });
       items.push({ label: 'Переслать…', onClick: () => setFwd(m) });
@@ -371,22 +407,31 @@ function ChatView({ dialog, onClose }: { dialog: DialogDoc; onClose: () => void 
     const d = fmtDay(m.createdAt), sep = d !== day; day = d;
     const prev = msgs[i - 1];
     const gp = !!prev && !sep && prev.senderId === m.senderId && m.createdAt - prev.createdAt < 5 * 60_000;   // продолжение группы подряд идущих сообщений
+    if (m.kind === 'system') return (
+      <div key={m.clientMessageId} style={{ display: 'contents' }}>
+        {sep && <div className="day"><span>{d}</span></div>}
+        <div className="sysmsg"><span>{m.text}</span></div>
+      </div>
+    );
     const out = m.senderId === me;
     const state = m.status === 'pending' ? ' · отправляется' : m.status === 'failed' ? ' · не отправлено'
-      : m.id && dialog.peerRead >= m.id ? ' · прочитано' : ' · доставлено';
+      : !isGroup && m.id && dialog.peerRead >= m.id ? ' · прочитано' : ' · доставлено';
     const target = m.replyToId ? byId.get(m.replyToId) : undefined;
     return (
       <div key={m.clientMessageId} style={{ display: 'contents' }}>
         {sep && <div className="day"><span>{d}</span></div>}
         <div id={m.id ? 'm-' + m.id : undefined} className={`msg ${out ? 'out' : 'in'} ${m.status}${gp ? ' gp' : ''}`}
           onContextMenu={(e) => openMenu(e, m)} onTouchStart={(e) => touchStart(e, m)} onTouchEnd={touchEnd} onTouchMove={touchEnd} onTouchCancel={touchEnd}>
+          {isGroup && !out && !gp && <div className="sname" style={{ ['--h' as string]: hue(m.senderId) }}>{nameOf(m.senderId)}</div>}
           {m.fwdFrom && <div className="fwd">Переслано от <b>{m.fwdFrom}</b></div>}
           {m.replyToId && (
             <button className="quote" onClick={() => jumpTo(m.replyToId)}>
-              <b>{target ? (target.senderId === me ? 'Вы' : dialog.peer.displayName) : 'Ответ'}</b>
-              <span>{target ? target.text : 'Исходное сообщение недоступно'}</span>
+              <b>{target ? nameOf(target.senderId) : 'Ответ'}</b>
+              <span>{target ? previewOf(target) : 'Исходное сообщение недоступно'}</span>
             </button>
           )}
+          {m.kind === 'image' && m.media && <ImageBubble m={m} onOpen={setLightbox} />}
+          {m.kind === 'voice' && m.media && <VoicePlayer m={m} />}
           {m.text}
           <span className="meta">
             {fmtTime(m.createdAt)}
@@ -401,21 +446,27 @@ function ChatView({ dialog, onClose }: { dialog: DialogDoc; onClose: () => void 
       </div>
     );
   });
-  const peerOnline = presence[dialog.peer.id] ?? false;
+  const peerOnline = !isGroup && (presence[dialog.peer.id] ?? false);
+  const typingName = isGroup ? nameOf(typingUser[dialog.id] ?? '') : '';
+  const sub = status !== 'online' ? 'нет соединения'
+    : isTyping ? (isGroup ? `${typingName} печатает…` : 'печатает…')
+    : isGroup ? membersLabel(members[dialog.id]?.length ?? dialog.memberCount)
+    : peerOnline ? 'в сети' : lastSeen[dialog.peer.id] ? fmtLastSeen(lastSeen[dialog.peer.id]) : 'не в сети';
+  const subCls = status !== 'online' ? '' : isTyping ? 'typing' : peerOnline ? 'on' : '';
   const pinCur = pinned.length ? pinned[pinIdx % pinned.length] : null;
   return (
     <>
       <div className="chead">
         <button className="ghost back" onClick={onClose} aria-label="К списку диалогов">←</button>
-        <button className="peer-btn" onClick={() => setProfile(true)} aria-label={`Профиль: ${dialog.peer.displayName}`}>
+        <button className="peer-btn" onClick={() => (isGroup ? setGroupInfo(true) : setProfile(true))} aria-label={`${isGroup ? 'Беседа' : 'Профиль'}: ${dialog.peer.displayName}`}>
           <Avatar name={dialog.peer.displayName} url={dialog.peer.avatarUrl} online={peerOnline} />
           <div className="t">
             <div className="n">{dialog.peer.displayName}</div>
-            <div className={'s ' + (status !== 'online' ? '' : isTyping ? 'typing' : peerOnline ? 'on' : '')}>{status !== 'online' ? 'нет соединения' : isTyping ? 'печатает…' : peerOnline ? 'в сети' : lastSeen[dialog.peer.id] ? fmtLastSeen(lastSeen[dialog.peer.id]) : 'не в сети'}</div>
+            <div className={'s ' + subCls}>{sub}</div>
           </div>
         </button>
         <button className="icbtn" onClick={() => setFindOpen((v) => !v)} aria-pressed={findOpen} aria-label="Поиск по сообщениям" title="Поиск по сообщениям"><Search /></button>
-        <button className="icbtn" onClick={() => setDelDialog(true)} aria-label="Удалить диалог" title="Удалить диалог"><Trash /></button>
+        <button className="icbtn" onClick={() => setDelDialog(true)} aria-label={isGroup ? (dialog.myRole === 'owner' ? 'Удалить беседу' : 'Выйти из беседы') : 'Удалить диалог'} title={isGroup ? (dialog.myRole === 'owner' ? 'Удалить беседу' : 'Выйти из беседы') : 'Удалить диалог'}><Trash /></button>
       </div>
       {findOpen && (
         <div className="findbar">
@@ -430,7 +481,7 @@ function ChatView({ dialog, onClose }: { dialog: DialogDoc; onClose: () => void 
               {hits?.length === 0 && <div className="empty">В этом чате ничего не нашли.</div>}
               {hits?.map((h) => (
                 <button key={h.key} className="hit" onClick={() => openHit(h)}>
-                  <small>{h.senderId === me ? 'Вы' : dialog.peer.displayName} · {fmtDay(h.createdAt)}, {fmtTime(h.createdAt)}</small>
+                  <small>{nameOf(h.senderId)} · {fmtDay(h.createdAt)}, {fmtTime(h.createdAt)}</small>
                   <span>{h.text}</span>
                 </button>
               ))}
@@ -444,7 +495,7 @@ function ChatView({ dialog, onClose }: { dialog: DialogDoc; onClose: () => void 
         <div className="pinbar">
           <button className="pinbody" onClick={() => { jumpTo(pinCur.id); setPinIdx((i) => i + 1); }}>
             <b>Закреплено{pinned.length > 1 ? ` · ${(pinIdx % pinned.length) + 1} из ${pinned.length}` : ''}</b>
-            <span>{pinCur.text}</span>
+            <span>{previewOf(pinCur)}</span>
           </button>
           <button className="ghost" onClick={() => togglePin(pinCur, false)} aria-label="Открепить сообщение" title="Открепить">✕</button>
         </div>
@@ -462,26 +513,50 @@ function ChatView({ dialog, onClose }: { dialog: DialogDoc; onClose: () => void 
       )}
       {replying && (
         <div className="editbar">
-          <span>Ответ · <b>{replying.senderId === me ? 'Вы' : dialog.peer.displayName}</b>: <i>{replying.text.length > 60 ? replying.text.slice(0, 60) + '…' : replying.text}</i></span>
+          <span>Ответ · <b>{nameOf(replying.senderId)}</b>: <i>{previewOf(replying).length > 60 ? previewOf(replying).slice(0, 60) + '…' : previewOf(replying)}</i></span>
           <button className="ghost" onClick={() => setReplying(null)}>Отмена</button>
         </div>
       )}
       <div className="comp">
-        <textarea ref={ta} rows={1} maxLength={4000} placeholder={editing ? 'Новый текст сообщения' : 'Сообщение'} aria-label="Сообщение"
-          onChange={() => { resize(); if (!editing) notifyTyping(dialog.id); }}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submit(); }
-            else if (e.key === 'Escape') { if (editing) cancelEdit(); else if (replying) setReplying(null); }
-          }} />
-        <button className="send" onClick={submit} aria-label={editing ? 'Сохранить' : 'Отправить'} title={editing ? 'Сохранить' : 'Отправить'}>
-          {editing
-            ? <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5" /></svg>
-            : <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12L20 4l-5 16-3.5-6.5L4 12z" /></svg>}
-        </button>
+        {voice.recording && (
+          <>
+            <button className="icbtn" onClick={voice.cancel} aria-label="Отменить запись" title="Отменить">✕</button>
+            <div className="rec" role="status"><i />Запись · {fmtDuration(voice.seconds)}</div>
+            <button className="send" onClick={() => void sendVoice()} aria-label="Отправить голосовое" title="Отправить">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12L20 4l-5 16-3.5-6.5L4 12z" /></svg>
+            </button>
+          </>
+        )}
+        <div className={'compin' + (voice.recording ? ' hide' : '')}>
+          {!editing && (
+            <>
+              <input ref={fileIn} type="file" accept="image/*" hidden onChange={(e) => sendImage(e.target.files?.[0])} />
+              <button className="icbtn" onClick={() => fileIn.current?.click()} aria-label="Прикрепить фото" title="Прикрепить фото"><Clip /></button>
+            </>
+          )}
+          <textarea ref={ta} rows={1} maxLength={4000} placeholder={editing ? 'Новый текст сообщения' : 'Сообщение'} aria-label="Сообщение"
+            onChange={() => { resize(); setHasText(!!ta.current?.value.trim()); if (!editing) notifyTyping(dialog.id); }}
+            onPaste={(e) => { const f = Array.from(e.clipboardData.files).find((x) => x.type.startsWith('image/')); if (f) { e.preventDefault(); sendImage(f); } }}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submit(); }
+              else if (e.key === 'Escape') { if (editing) cancelEdit(); else if (replying) setReplying(null); }
+            }} />
+          {hasText || editing || !canRecord()
+            ? (
+              <button className="send" onClick={submit} aria-label={editing ? 'Сохранить' : 'Отправить'} title={editing ? 'Сохранить' : 'Отправить'}>
+                {editing
+                  ? <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5" /></svg>
+                  : <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12L20 4l-5 16-3.5-6.5L4 12z" /></svg>}
+              </button>
+            )
+            : <button className="send" onClick={() => void startVoice()} aria-label="Записать голосовое" title="Голосовое сообщение"><Mic /></button>}
+        </div>
       </div>
       {menu && <ContextMenu x={menu.x} y={menu.y} items={menuItems(menu)} onClose={() => setMenu(null)} />}
       {fwd && <ForwardModal msg={fwd} onClose={() => setFwd(null)} onDone={() => setFwd(null)} />}
       {profile && <PeerProfile peer={dialog.peer} online={peerOnline} onClose={() => setProfile(false)} />}
+      {groupInfo && <GroupInfo dialog={dialog} onClose={() => setGroupInfo(false)} onLeft={() => { setGroupInfo(false); onClose(); }} />}
+      {lightbox && <Lightbox url={lightbox} onClose={() => setLightbox(null)} />}
       {delMsg && (
         <ConfirmModal title="Удалить сообщение?" checkLabel={`Также удалить для ${dialog.peer.displayName}`}
           onCancel={() => setDelMsg(null)} onConfirm={delMsgNow}>
@@ -489,8 +564,11 @@ function ChatView({ dialog, onClose }: { dialog: DialogDoc; onClose: () => void 
         </ConfirmModal>
       )}
       {delDialog && (
-        <ConfirmModal title="Удалить диалог?" confirmLabel="Удалить диалог" onCancel={() => setDelDialog(false)} onConfirm={delDialogNow}>
-          Вся переписка с {dialog.peer.displayName} будет удалена у обоих участников. Это нельзя отменить.
+        <ConfirmModal title={isGroup ? (dialog.myRole === 'owner' ? 'Удалить беседу?' : 'Выйти из беседы?') : 'Удалить диалог?'}
+          confirmLabel={isGroup ? (dialog.myRole === 'owner' ? 'Удалить беседу' : 'Выйти') : 'Удалить диалог'} onCancel={() => setDelDialog(false)} onConfirm={delDialogNow}>
+          {isGroup
+            ? (dialog.myRole === 'owner' ? `Беседа «${dialog.peer.displayName}» и вся переписка будут удалены у всех участников. Это нельзя отменить.` : `Вы выйдете из беседы «${dialog.peer.displayName}» и перестанете получать сообщения.`)
+            : `Вся переписка с ${dialog.peer.displayName} будет удалена у обоих участников. Это нельзя отменить.`}
         </ConfirmModal>
       )}
     </>

@@ -23,14 +23,19 @@ public static class ImageProcessor
     }
 
     /// <summary>Обои: вписываются в 1920 px по большей стороне (без увеличения), WebP.</summary>
-    public static byte[] Wallpaper(Stream input)
+    public static byte[] Wallpaper(Stream input) => Fit(input, 1920, 80).Data;
+
+    /// <summary>Фото в сообщении: до 1600 px по большей стороне, WebP; возвращает и итоговые размеры (для заглушки в чате).</summary>
+    public static (byte[] Data, int Width, int Height) Photo(Stream input) => Fit(input, 1600, 82);
+
+    private static (byte[] Data, int Width, int Height) Fit(Stream input, int max, int quality)
     {
         using var src = Decode(input);
-        var scale = Math.Min(1f, 1920f / Math.Max(src.Width, src.Height));
+        var scale = Math.Min(1f, (float)max / Math.Max(src.Width, src.Height));
         var w = Math.Max(1, (int)Math.Round(src.Width * scale));
         var h = Math.Max(1, (int)Math.Round(src.Height * scale));
         using var dst = Draw(src, SKRect.Create(0, 0, src.Width, src.Height), w, h);
-        return Encode(dst, 80);
+        return (Encode(dst, quality), w, h);
     }
 
     private static SKBitmap Decode(Stream input)

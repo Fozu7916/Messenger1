@@ -11,7 +11,11 @@ public sealed record NewMessage(
     string? MediaUrl,
     string? ReplyToId = null,
     string? ForwardedFromId = null,
-    string? ForwardedFromName = null);
+    string? ForwardedFromName = null,
+    string Kind = "text",
+    int? MediaWidth = null,
+    int? MediaHeight = null,
+    int? MediaDurationMs = null);
 
 public sealed record SaveResult(MessageDto Message, bool IsNew);
 

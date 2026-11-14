@@ -6,7 +6,7 @@ import { useAuth } from './auth';
 import { closeDb, openDb, type DB } from './db';
 import { beep, getNotifyPrefs, showDesktop } from './notify';
 import { useToast } from '../components/ui';
-import type { DialogDoc, DialogDto, MessageDoc, MessageDto, User } from '../types';
+import type { DialogDoc, DialogDto, Member, MessageDoc, MessageDto, User } from '../types';
 
 export type ConnStatus = 'connecting' | 'online' | 'offline';
 
@@ -16,6 +16,11 @@ interface Chat {
   error: string;                        // последняя ошибка синхронизации ('' — всё хорошо)
   status: ConnStatus;                   // состояние SignalR
   typing: Record<string, boolean>;      // dialogId → собеседник печатает
+  typingUser: Record<string, string>;   // dialogId → userId печатающего (в беседах показываем имя)
+  members: Record<string, Member[]>;    // dialogId → участники беседы (подгружаются при открытии)
+  loadMembers(dialogId: string): Promise<void>;
+  createGroup(title: string, memberIds: string[]): Promise<string>;
+  sendMedia(dialogId: string, kind: 'image' | 'voice', file: Blob, opts?: { text?: string; durationMs?: number; replyToId?: string }): void;
   presence: Record<string, boolean>;    // userId → онлайн
   lastSeen: Record<string, number>;     // userId → время последнего выхода (мс)
   renamed: Record<string, string>;      // временный id диалога → серверный id
@@ -51,7 +56,10 @@ const toLocal = (m: MessageDto): MessageDoc => ({
   text: m.text, createdAt: Date.parse(m.createdAt), status: 'sent', isDeleted: false,
   editedAt: m.editedAt ? Date.parse(m.editedAt) : 0,
   replyToId: m.replyToId ?? '', fwdFrom: m.forwardedFromName ?? '',
+  kind: m.kind ?? 'text', media: m.mediaUrl ?? '', mw: m.mediaWidth ?? 0, mh: m.mediaHeight ?? 0, dur: m.mediaDurationMs ?? 0,
 });
+/** Текст для превью и уведомлений: у вложений без подписи — название вложения. */
+export const previewOf = (m: { text: string; kind?: string }) => m.text || (m.kind === 'image' ? 'Фото' : m.kind === 'voice' ? 'Голосовое сообщение' : '');
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 /** Живой запрос к RxDB: компонент перерисовывается при любом изменении данных. */
@@ -82,6 +90,10 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   const [lastSeen, setLastSeen] = useState<Record<string, number>>({});
   const [renamed, setRenamed] = useState<Record<string, string>>({});
   const [pins, setPins] = useState<Record<string, string[]>>({});
+  const [typingUser, setTypingUser] = useState<Record<string, string>>({});
+  const [members, setMembers] = useState<Record<string, Member[]>>({});
+  const membersRef = useRef(members); membersRef.current = members;
+  const blobs = useRef(new Map<string, Blob>());   // ещё не отправленные вложения (живут, пока открыта вкладка)
 
   const dbRef = useRef<DB | null>(null);
   const hubRef = useRef<HubConnection | null>(null);
@@ -97,6 +109,11 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   const connected = () => hubRef.current?.state === HubConnectionState.Connected;
   const report = (e: unknown) => { console.error(e); setError(errText(e)); };
   const upsertMessages = (list: MessageDto[]) => dbRef.current!.messages.bulkUpsert(list.map(toLocal));
+  const loadMembers = async (dialogId: string) => {
+    if (isTemp(dialogId)) return;
+    const list = await api.groupMembers(dialogId);
+    setMembers((m) => ({ ...m, [dialogId]: list }));
+  };
   const dropPin = (messageId: string) =>
     setPins((p) => Object.fromEntries(Object.entries(p).map(([k, v]) => [k, v.filter((x) => x !== messageId)])));
   // Закреплённые приходят с сервера (общие для обоих участников); сами сообщения кладём в локальную БД, чтобы показать текст
@@ -117,7 +134,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       if (!tmp) return null;
       const t = tmp.toJSON() as DialogDoc;
       const dto = await api.createDialog(t.peer.id); // бросит ошибку, пока нет сети
-      await d.dialogs.upsert({ id: dto.id, createdAt: Date.parse(dto.createdAt), peer: toPeer(dto.peer), unread: t.unread, peerRead: '', pending: false });
+      await d.dialogs.upsert({ id: dto.id, createdAt: Date.parse(dto.createdAt), peer: toPeer(dto.peer), unread: t.unread, peerRead: '', pending: false, kind: 'direct', memberCount: 2, myRole: 'member' });
       for (const m of await d.messages.find({ selector: { dialogId: tempId } }).exec()) await m.incrementalPatch({ dialogId: dto.id });
       await tmp.remove();
       setRenamed((r) => ({ ...r, [tempId]: dto.id }));
@@ -169,6 +186,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       id: x.id, createdAt: Date.parse(x.createdAt), peer: toPeer(x.peer),
       unread: activeRef.current === x.id && visible ? 0 : x.unreadCount,
       peerRead: x.peerLastReadId ?? '', pending: false,
+      kind: x.kind ?? 'direct', memberCount: x.memberCount ?? 2, myRole: x.myRole ?? 'member',
     })));
     for (const x of local) if (x.pending) void materialize(x.id).catch(() => {}); // досоздаём офлайн-диалоги
     const res = await Promise.allSettled(list.map((x) => syncMessages(x.id)));
@@ -190,6 +208,16 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         const real = await materialize(m.dialogId);
         if (!real) return;
         m = { ...m, dialogId: real };
+      }
+      if (m.kind === 'image' || m.kind === 'voice') {   // вложения уходят по REST (multipart), а не через хаб
+        const blob = blobs.current.get(cid);
+        if (!blob) { await (await d.messages.findOne(cid).exec())?.incrementalPatch({ status: 'failed' }); return; }   // страницу перезагрузили до отправки
+        const sent = toLocal(await api.sendMedia(m.dialogId, {
+          clientMessageId: cid, kind: m.kind, file: blob, text: m.text, durationMs: m.dur, replyToId: m.replyToId || undefined,
+        }));
+        await (await d.messages.findOne(cid).exec())?.incrementalPatch({ id: sent.id, status: 'sent', media: sent.media, mw: sent.mw, mh: sent.mh, dur: sent.dur });
+        blobs.current.delete(cid);
+        return;
       }
       const serverUlid: string = m.replyToId
         ? await hubRef.current!.invoke('SendReply', m.clientMessageId, m.dialogId, m.text, m.replyToId)
@@ -276,16 +304,19 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     setTyping((t) => { const n = { ...t }; delete n[m.dialogId]; return n; });
     const dlg = await d.dialogs.findOne(m.dialogId).exec();
     if (!dlg) { await sync(); return; }
+    if (m.kind === 'system') { void loadMembers(m.dialogId).catch(() => {}); return; }   // служебные: без счётчика и уведомления
     const watching = activeRef.current === m.dialogId && document.visibilityState === 'visible';
     if (watching) { void markRead(m.dialogId); return; }
     const info = dlg.toJSON() as DialogDoc;
     await dlg.incrementalModify((x) => ({ ...x, unread: x.unread + 1 }));
-    notifyIncoming(info.peer.displayName, m.text, m.dialogId);
+    const who = info.kind === 'group' ? membersRef.current[m.dialogId]?.find((x) => x.user.id === m.senderId)?.user.displayName : undefined;
+    notifyIncoming(info.peer.displayName, (who ? who + ': ' : '') + previewOf(m), m.dialogId);
   };
 
   const onTyping = (did: string, uid: string) => {
     if (uid === me.id) return;
     setTyping((t) => ({ ...t, [did]: true }));
+    setTypingUser((t) => ({ ...t, [did]: uid }));
     clearTimeout(timers.current[did]);
     timers.current[did] = window.setTimeout(() => setTyping((t) => { const n = { ...t }; delete n[did]; return n; }), 3500);
   };
@@ -345,6 +376,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         else if (info.peerRead < upTo) await doc.incrementalPatch({ peerRead: upTo });
       });
       hub.on('UserTyping', onTyping);
+      hub.on('DialogsChanged', () => { void sync().then(() => { const a = activeRef.current; if (a) return loadMembers(a); }).catch(report); });   // беседу создали/изменили/удалили
       hub.on('PresenceChanged', (uid: string, st: string, at?: string | null) => {
         setPresence((p) => ({ ...p, [uid]: st === 'online' }));
         if (st !== 'online' && at) setLastSeen((p) => ({ ...p, [uid]: Date.parse(at) }));
@@ -381,7 +413,18 @@ export function ChatProvider({ children }: { children: ReactNode }) {
 
   // ---------- Действия интерфейса ----------
   const value: Chat = {
-    db, dbError, error, status, typing, presence, lastSeen, renamed, pins,
+    db, dbError, error, status, typing, typingUser, members, loadMembers, presence, lastSeen, renamed, pins,
+    createGroup: async (title, memberIds) => { const dto = await api.createGroup(title, memberIds); await sync(); return dto.id; },
+    sendMedia: (dialogId, kind, file, opts) => {
+      const cid = newId();
+      blobs.current.set(cid, file);
+      const m: MessageDoc = {
+        clientMessageId: cid, id: '', dialogId, senderId: me.id, text: opts?.text ?? '', createdAt: Date.now(), status: 'pending',
+        isDeleted: false, editedAt: 0, replyToId: opts?.replyToId ?? '', fwdFrom: '',
+        kind, media: URL.createObjectURL(file), mw: 0, mh: 0, dur: Math.round(opts?.durationMs ?? 0),
+      };
+      dbRef.current!.messages.insert(m).then(() => push(cid)).catch(report);
+    },
     setActive: (id) => {
       activeRef.current = id;
       if (id) { void clearUnread(id); void markRead(id); }
@@ -390,7 +433,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       const m: MessageDoc = {
         clientMessageId: newId(), id: '', dialogId, senderId: me.id, text,
         createdAt: Date.now(), status: 'pending', isDeleted: false, editedAt: 0,
-        replyToId: replyToId ?? '', fwdFrom: '',
+        replyToId: replyToId ?? '', fwdFrom: '', kind: 'text', media: '', mw: 0, mh: 0, dur: 0,
       };
       // Optimistic UI: сообщение сразу попадает в локальную БД и на экран, сеть — потом
       dbRef.current!.messages.insert(m).then(() => push(m.clientMessageId)).catch(report);
@@ -444,11 +487,18 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       if (have) return have.id;
       // Диалог появляется в локальной БД мгновенно, на сервере создаётся, как только появится сеть
       const tempId = 'L' + user.id;
-      await d.dialogs.upsert({ id: tempId, createdAt: Date.now(), peer: toPeer(user), unread: 0, peerRead: '', pending: true });
+      await d.dialogs.upsert({ id: tempId, createdAt: Date.now(), peer: toPeer(user), unread: 0, peerRead: '', pending: true, kind: 'direct', memberCount: 2, myRole: 'member' });
       void materialize(tempId).catch((e) => console.warn('dialog will be created later', e));
       return tempId;
     },
-    removeDialog: async (id) => { if (!isTemp(id)) await api.deleteDialog(id); await dropDialogLocal(id); },
+    // Беседу владелец удаляет у всех, остальные из неё выходят; личный диалог удаляется у обоих
+    removeDialog: async (id) => {
+      if (!isTemp(id)) {
+        const info = (await dbRef.current!.dialogs.findOne(id).exec())?.toJSON() as DialogDoc | undefined;
+        if (info?.kind === 'group' && info.myRole !== 'owner') await api.removeMember(id, 'me'); else await api.deleteDialog(id);
+      }
+      await dropDialogLocal(id);
+    },
     loadOlder: async (did) => {
       if (isTemp(did)) return 0;
       const ids = plain<MessageDoc>(await dbRef.current!.messages.find({ selector: { dialogId: did, status: 'sent' } }).exec())

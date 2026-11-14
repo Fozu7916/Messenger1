@@ -11,13 +11,16 @@ public sealed class MessageRepository(NpgsqlDataSource dataSource) : IMessageRep
     private const string Columns =
         "id AS Id, client_message_id AS ClientMessageId, dialog_id AS DialogId, sender_id AS SenderId, " +
         "text AS Text, media_url AS MediaUrl, created_at AS CreatedAt, edited_at AS EditedAt, " +
-        "reply_to_id AS ReplyToId, forwarded_from_id AS ForwardedFromId, forwarded_from_name AS ForwardedFromName";
+        "reply_to_id AS ReplyToId, forwarded_from_id AS ForwardedFromId, forwarded_from_name AS ForwardedFromName, " +
+        "kind AS Kind, media_width AS MediaWidth, media_height AS MediaHeight, media_duration_ms AS MediaDurationMs";
 
     // created_at проставляет БД (now()): единые часы для всех инстансов бэкенда.
     // NB: при партиционировании messages уникальный индекс должен включать ключ партиции.
     private const string InsertSql = $"""
-        INSERT INTO messages (id, client_message_id, dialog_id, sender_id, text, media_url, reply_to_id, forwarded_from_id, forwarded_from_name)
-        VALUES (@Id, @ClientMessageId, @DialogId, @SenderId, @Text, @MediaUrl, @ReplyToId, @ForwardedFromId, @ForwardedFromName)
+        INSERT INTO messages (id, client_message_id, dialog_id, sender_id, text, media_url, reply_to_id, forwarded_from_id, forwarded_from_name,
+                              kind, media_width, media_height, media_duration_ms)
+        VALUES (@Id, @ClientMessageId, @DialogId, @SenderId, @Text, @MediaUrl, @ReplyToId, @ForwardedFromId, @ForwardedFromName,
+                @Kind, @MediaWidth, @MediaHeight, @MediaDurationMs)
         ON CONFLICT (sender_id, client_message_id) DO NOTHING
         RETURNING {Columns};
         """;
@@ -77,6 +80,7 @@ public sealed class MessageRepository(NpgsqlDataSource dataSource) : IMessageRep
               AND m.deleted_at IS NULL
               AND NOT EXISTS (SELECT 1 FROM message_hides h WHERE h.message_id = m.id AND h.user_id = @userId)
               AND (dm.last_read_id IS NULL OR m.id > dm.last_read_id)
+              AND m.kind <> 'system'
             GROUP BY m.dialog_id;
             """;
 

@@ -43,6 +43,10 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
             e.HasKey(x => x.Id);
             UlidColumn(e.Property(x => x.Id));
             e.Property(x => x.PairKey).HasMaxLength(64);
+            e.Property(x => x.Kind).HasMaxLength(10).HasDefaultValue("direct");
+            e.Property(x => x.Title).HasMaxLength(80);
+            e.Property(x => x.AvatarUrl).HasMaxLength(2048);
+            e.Property(x => x.CreatedById).HasMaxLength(26).UseCollation("C");
             e.HasIndex(x => x.PairKey).IsUnique();
         });
 
@@ -68,6 +72,7 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
             e.HasOne(x => x.Dialog).WithMany(d => d.Members).HasForeignKey(x => x.DialogId).OnDelete(DeleteBehavior.Cascade);
             e.HasOne(x => x.User).WithMany().HasForeignKey(x => x.UserId).OnDelete(DeleteBehavior.Cascade);
             e.Property(x => x.LastReadId).HasMaxLength(26).UseCollation("C");
+            e.Property(x => x.Role).HasMaxLength(10).HasDefaultValue("member");
             e.HasIndex(x => x.UserId);
         });
 
@@ -84,6 +89,7 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
             e.Property(x => x.ReplyToId).HasMaxLength(26).UseCollation("C");
             e.Property(x => x.ForwardedFromId).HasMaxLength(26).UseCollation("C");
             e.Property(x => x.ForwardedFromName).HasMaxLength(64);
+            e.Property(x => x.Kind).HasMaxLength(10).HasDefaultValue("text");
             e.HasOne<Message>().WithMany().HasForeignKey(x => x.ReplyToId).OnDelete(DeleteBehavior.SetNull);
             e.HasIndex(x => x.ReplyToId);
             e.Property(x => x.CreatedAt).HasDefaultValueSql("now()");

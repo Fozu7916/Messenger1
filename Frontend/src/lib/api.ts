@@ -1,4 +1,4 @@
-import type { AuthResponse, DialogDto, MessageDto, Profile, User } from '../types';
+import type { AuthResponse, DialogDto, Member, MessageDto, Profile, User } from '../types';
 
 export const BASE: string = import.meta.env.VITE_API_URL ?? '';
 
@@ -137,12 +137,34 @@ export const deleteWallpaper = (id: string) => req<void>('DELETE', `/api/users/m
 export const getAppearance = () => req<Record<string, unknown>>('GET', '/api/users/me/appearance');
 export const putAppearance = (v: object) => req<void>('PUT', '/api/users/me/appearance', v);
 
-// Приватный файл по токену → Blob (обычный <img src> не умеет слать Authorization)
-export async function wallpaperBlob(id: string, retried = false): Promise<Blob> {
+// Приватный файл по токену → Blob (обычный <img>/<audio> не умеет слать Authorization)
+export async function authedBlob(path: string, retried = false): Promise<Blob> {
   let res: Response;
-  try { res = await fetch(`${BASE}/api/users/me/wallpapers/${id}`, { credentials: 'include', headers: token ? { Authorization: `Bearer ${token}` } : {} }); }
+  try { res = await fetch(`${BASE}${path}`, { credentials: 'include', headers: token ? { Authorization: `Bearer ${token}` } : {} }); }
   catch { throw new ApiError(0, 'Нет соединения с сервером'); }
-  if (res.status === 401 && token && !retried && (await refresh().catch(() => null))) return wallpaperBlob(id, true);
+  if (res.status === 401 && token && !retried && (await refresh().catch(() => null))) return authedBlob(path, true);
   if (!res.ok) throw new ApiError(res.status, problemText(res.status, null));
   return res.blob();
+}
+export const wallpaperBlob = (id: string) => authedBlob(`/api/users/me/wallpapers/${id}`);
+
+// ---- Беседы ----
+export const createGroup = (title: string, memberIds: string[]) => req<DialogDto>('POST', '/api/dialogs/group', { title, memberIds });
+export const groupMembers = (id: string) => req<Member[]>('GET', `/api/dialogs/${id}/members`);
+export const renameGroup = (id: string, title: string) => req<void>('PUT', `/api/dialogs/${id}`, { title });
+export const addMembers = (id: string, userIds: string[]) => req<Member[]>('POST', `/api/dialogs/${id}/members`, { userIds });
+export const removeMember = (id: string, userId: string) => req<void>('DELETE', `/api/dialogs/${id}/members/${userId}`);   // userId = 'me' — выйти
+export const uploadGroupAvatar = (id: string, file: File) => req<void>('POST', `/api/dialogs/${id}/avatar`, form(file));
+export const deleteGroupAvatar = (id: string) => req<void>('DELETE', `/api/dialogs/${id}/avatar`);
+
+// ---- Фото и голосовые ----
+export function sendMedia(dialogId: string, v: { clientMessageId: string; kind: 'image' | 'voice'; file: Blob; text?: string; durationMs?: number; replyToId?: string }) {
+  const f = new FormData();
+  f.append('file', v.file, v.kind === 'voice' ? 'voice' : 'photo');
+  f.append('clientMessageId', v.clientMessageId);
+  f.append('kind', v.kind);
+  if (v.text) f.append('text', v.text);
+  if (v.durationMs) f.append('durationMs', String(Math.round(v.durationMs)));
+  if (v.replyToId) f.append('replyToId', v.replyToId);
+  return req<MessageDto>('POST', `/api/dialogs/${dialogId}/messages/media`, f);
 }

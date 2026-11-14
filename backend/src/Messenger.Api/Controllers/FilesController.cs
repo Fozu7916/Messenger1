@@ -1,11 +1,14 @@
 using Messenger.Api.Auth;
 using Messenger.Api.Contracts;
 using Messenger.Api.Data;
+using Messenger.Api.Hubs;
 using Messenger.Api.Media;
+using Messenger.Api.Messages;
 using Messenger.Api.Storage;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.RateLimiting;
+using Microsoft.AspNetCore.SignalR;
 using Microsoft.EntityFrameworkCore;
 
 namespace Messenger.Api.Controllers;
@@ -16,7 +19,7 @@ namespace Messenger.Api.Controllers;
 /// Обои приватны: отдаются только владельцу по токену (клиент берёт их через fetch и превращает в blob-ссылку).
 /// </summary>
 [ApiController, Authorize, EnableRateLimiting("users")]
-public sealed class FilesController(AppDbContext db, IFileStorage storage, ILogger<FilesController> log) : ControllerBase
+public sealed class FilesController(AppDbContext db, IFileStorage storage, IDialogAccess access, IHubContext<ChatHub> hub, ILogger<FilesController> log) : ControllerBase
 {
     private const int MaxUpload = 5 * 1024 * 1024;
     private const int MaxWallpapers = 12;
@@ -114,7 +117,75 @@ public sealed class FilesController(AppDbContext db, IFileStorage storage, ILogg
         return NoContent();
     }
 
+    // ---------------- Аватар беседы ----------------
+
+    /// <summary>Загрузить аватар беседы (любой участник). Участникам уходит DialogsChanged.</summary>
+    [HttpPost("api/dialogs/{dialogId}/avatar"), RequestSizeLimit(MaxUpload), RequestFormLimits(MultipartBodyLengthLimit = MaxUpload)]
+    public async Task<IActionResult> UploadGroupAvatar(string dialogId, IFormFile file, CancellationToken ct)
+    {
+        var dialog = await GroupAsync(dialogId, ct);
+        if (dialog is null) return NotFound();
+        var processed = await ProcessAsync(file, ImageProcessor.Avatar);
+        if (processed.Error is not null) return processed.Error;
+        var key = $"group-avatars/{dialogId}/{Ulid.NewUlid()}.webp";
+        try { await storage.PutAsync(key, new MemoryStream(processed.Bytes!), processed.Bytes!.Length, "image/webp", ct); }
+        catch (StorageNotConfiguredException) { return Unavailable(); }
+        var old = dialog.AvatarUrl;
+        dialog.AvatarUrl = FilesPrefix + key;
+        await db.SaveChangesAsync(ct);
+        await DeleteGroupAvatarFileAsync(dialogId, old);
+        await NotifyAsync(dialogId, ct);
+        return NoContent();
+    }
+
+    [HttpDelete("api/dialogs/{dialogId}/avatar")]
+    public async Task<IActionResult> DeleteGroupAvatar(string dialogId, CancellationToken ct)
+    {
+        var dialog = await GroupAsync(dialogId, ct);
+        if (dialog is null) return NotFound();
+        var old = dialog.AvatarUrl;
+        dialog.AvatarUrl = null;
+        await db.SaveChangesAsync(ct);
+        await DeleteGroupAvatarFileAsync(dialogId, old);
+        await NotifyAsync(dialogId, ct);
+        return NoContent();
+    }
+
+    [HttpGet("api/files/group-avatars/{dialogId}/{name}"), AllowAnonymous]
+    public Task<IActionResult> GetGroupAvatar(string dialogId, string name, CancellationToken ct) =>
+        IsUlid(dialogId) && name.Length == 31 && name.EndsWith(".webp") && IsUlid(name[..26])
+            ? ServeAsync($"group-avatars/{dialogId}/{name}", "public, max-age=31536000, immutable", ct)
+            : Task.FromResult<IActionResult>(NotFound());
+
+    // ---------------- Вложения сообщений (фото, голосовые) ----------------
+
+    /// <summary>Файл вложения. Только участникам диалога; клиент берёт его через fetch с токеном и показывает blob-ссылкой.</summary>
+    [HttpGet("api/dialogs/{dialogId}/media/{name}")]
+    public async Task<IActionResult> GetMedia(string dialogId, string name, CancellationToken ct)
+    {
+        if (!IsUlid(dialogId) || !MediaKeys.IsValidName(name) || !await access.IsMemberAsync(dialogId, User.GetUserId(), ct)) return NotFound();
+        return await ServeAsync(MediaKeys.Key(dialogId, name), "private, max-age=31536000, immutable", ct, MediaKeys.ContentType(name[27..]));
+    }
+
     // ---------------- Общее ----------------
+
+    private async Task<Domain.Dialog?> GroupAsync(string dialogId, CancellationToken ct)
+    {
+        var me = User.GetUserId();
+        return await db.Dialogs.FirstOrDefaultAsync(d => d.Id == dialogId && d.Kind == "group" && d.Members.Any(m => m.UserId == me), ct);
+    }
+
+    private async Task NotifyAsync(string dialogId, CancellationToken ct) =>
+        await hub.Clients.Users(await access.GetMemberIdsAsync(dialogId, ct)).SendAsync("DialogsChanged", ct);
+
+    private async Task DeleteGroupAvatarFileAsync(string dialogId, string? url)
+    {
+        if (url is null || !url.StartsWith(FilesPrefix)) return;
+        var key = url[FilesPrefix.Length..];
+        if (!key.StartsWith($"group-avatars/{dialogId}/")) return;
+        try { await storage.DeleteAsync(key); }
+        catch (Exception ex) { log.LogWarning(ex, "Could not delete old group avatar {Key}", key); }
+    }
 
     private static bool IsUlid(string s) => s.Length == 26 && s.All(char.IsAsciiLetterOrDigit);
 
@@ -138,7 +209,7 @@ public sealed class FilesController(AppDbContext db, IFileStorage storage, ILogg
         }
     }
 
-    private async Task<IActionResult> ServeAsync(string key, string cacheControl, CancellationToken ct)
+    private async Task<IActionResult> ServeAsync(string key, string cacheControl, CancellationToken ct, string contentType = "image/webp")
     {
         IStoredFile? file;
         try { file = await storage.GetAsync(key, ct); }
@@ -158,7 +229,7 @@ public sealed class FilesController(AppDbContext db, IFileStorage storage, ILogg
             }
         }
         Response.RegisterForDisposeAsync(file);
-        return File(file.Content, "image/webp");   // тип фиксирован: мы сами перекодировали всё в WebP
+        return File(file.Content, contentType);   // тип определяем мы сами (по расширению ключа), а не берём у клиента
     }
 
     /// <summary>Удаляет прежний аватар, только если он наш и принадлежит этому пользователю (внешние ссылки не трогаем).</summary>
