@@ -5,11 +5,14 @@ namespace Messenger.Api.Media;
 /// <summary>Ключи и адреса вложений: media/{dialogId}/{ulid}.{ext}, отдаются только участникам диалога.</summary>
 public static class MediaKeys
 {
-    public static readonly string[] Extensions = ["webp", "ogg", "webm", "m4a", "mp3"];
+    public static readonly string[] Extensions = ["webp", "ogg", "webm", "m4a", "mp3", "mp4"];
+
+    /// <summary>Кадр-превью видео лежит рядом с ним под тем же id: {id}.webp (видео — {id}.mp4 / {id}.webm).</summary>
+    public static string Poster(string name) => Path.ChangeExtension(name, "webp");
 
     public static string ContentType(string ext) => ext switch
     {
-        "webp" => "image/webp", "ogg" => "audio/ogg", "webm" => "audio/webm", "m4a" => "audio/mp4", "mp3" => "audio/mpeg",
+        "webp" => "image/webp", "ogg" => "audio/ogg", "webm" => "audio/webm", "m4a" => "audio/mp4", "mp3" => "audio/mpeg", "mp4" => "video/mp4",
         _ => "application/octet-stream",
     };
 
@@ -49,6 +52,22 @@ public static class VoiceFormat
         if (h.Length >= 4 && h[0] == 'O' && h[1] == 'g' && h[2] == 'g' && h[3] == 'S') return ("ogg", "audio/ogg");          // Firefox
         if (h.Length >= 8 && h[4] == 'f' && h[5] == 't' && h[6] == 'y' && h[7] == 'p') return ("m4a", "audio/mp4");          // Safari
         if (h.Length >= 3 && ((h[0] == 'I' && h[1] == 'D' && h[2] == '3') || (h[0] == 0xFF && (h[1] & 0xE0) == 0xE0))) return ("mp3", "audio/mpeg");
+        return null;
+    }
+}
+
+/// <summary>Определяет формат видео по первым байтам. Аудио в контейнере MP4 (M4A/M4B) видео не считается.</summary>
+public static class VideoFormat
+{
+    public static (string Ext, string ContentType)? Detect(ReadOnlySpan<byte> h)
+    {
+        if (h.Length >= 4 && h[0] == 0x1A && h[1] == 0x45 && h[2] == 0xDF && h[3] == 0xA3) return ("webm", "video/webm");
+        if (h.Length >= 12 && h[4] == 'f' && h[5] == 't' && h[6] == 'y' && h[7] == 'p')
+        {
+            var brand = System.Text.Encoding.ASCII.GetString(h.Slice(8, 4));
+            if (brand is "M4A " or "M4B " or "M4P ") return null;
+            return ("mp4", "video/mp4");
+        }
         return null;
     }
 }

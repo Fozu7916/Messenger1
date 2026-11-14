@@ -168,3 +168,18 @@ export function sendMedia(dialogId: string, v: { clientMessageId: string; kind: 
   if (v.replyToId) f.append('replyToId', v.replyToId);
   return req<MessageDto>('POST', `/api/dialogs/${dialogId}/messages/media`, f);
 }
+
+// ---- Видео: ссылка → PUT прямо в хранилище → подтверждение ----
+export interface VideoUpload { fileId: string; ext: 'mp4' | 'webm'; uploadUrl: string; contentType: string; expiresAt: string }
+export const videoUpload = (dialogId: string, v: { contentType: string; size: number; durationMs: number }) =>
+  req<VideoUpload>('POST', `/api/dialogs/${dialogId}/video/upload`, v);
+export function sendVideo(dialogId: string, v: { clientMessageId: string; fileId: string; ext: string; text?: string; durationMs: number; width: number; height: number; replyToId?: string; poster?: Blob | null }) {
+  const f = new FormData();
+  f.append('clientMessageId', v.clientMessageId); f.append('fileId', v.fileId); f.append('ext', v.ext);
+  f.append('durationMs', String(Math.round(v.durationMs))); f.append('width', String(v.width)); f.append('height', String(v.height));
+  if (v.text) f.append('text', v.text);
+  if (v.replyToId) f.append('replyToId', v.replyToId);
+  if (v.poster) f.append('poster', v.poster, 'poster.jpg');
+  return req<MessageDto>('POST', `/api/dialogs/${dialogId}/messages/video`, f);
+}
+export const mediaLink = (dialogId: string, name: string) => req<{ url: string }>('GET', `/api/dialogs/${dialogId}/media/${name}/url`);

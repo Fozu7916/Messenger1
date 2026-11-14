@@ -111,3 +111,26 @@ public sealed class SendMediaForm
     public int? DurationMs { get; init; }
     public string? ReplyToId { get; init; }
 }
+
+/// <summary>Шаг 1 отправки видео: получить временную ссылку для загрузки в хранилище.</summary>
+public sealed class VideoUploadRequest
+{
+    [Required] public string ContentType { get; init; } = "";
+    [Range(1, 52_428_800)] public long Size { get; init; }
+    [Range(1, 180_000)] public int DurationMs { get; init; }
+}
+
+/// <summary>Шаг 3: подтвердить загруженное видео и создать сообщение (multipart; poster — необязательный кадр-превью).</summary>
+public sealed class SendVideoForm
+{
+    [Required, StringLength(64, MinimumLength = 1)] public string ClientMessageId { get; init; } = "";
+    [Required, StringLength(26, MinimumLength = 26)] public string FileId { get; init; } = "";
+    /// <summary>"mp4" или "webm" — из ответа шага 1.</summary>
+    [Required] public string Ext { get; init; } = "";
+    [MaxLength(1000)] public string? Text { get; init; }
+    [Range(1, 180_000)] public int DurationMs { get; init; }
+    [Range(1, 8192)] public int Width { get; init; }
+    [Range(1, 8192)] public int Height { get; init; }
+    public string? ReplyToId { get; init; }
+    public IFormFile? Poster { get; init; }
+}

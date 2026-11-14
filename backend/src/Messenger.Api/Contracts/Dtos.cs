@@ -23,6 +23,9 @@ public sealed record MessageDto(
 
 public sealed record WallpaperDto(string Id);
 
+/// <summary>Куда клиенту грузить видео: PUT на uploadUrl с заголовком Content-Type = contentType.</summary>
+public sealed record VideoUploadDto(string FileId, string Ext, string UploadUrl, string ContentType, DateTime ExpiresAt);
+
 /// <summary>Профиль. IsOnline/LastSeenAt заполняются только для собеседников (с кем есть общий диалог).</summary>
 public sealed record ProfileDto(
     string Id,

@@ -137,9 +137,15 @@ public sealed class MessagesController(
         await db.Messages.Where(m => m.Id == id)
             .ExecuteUpdateAsync(s => s.SetProperty(m => m.DeletedAt, (DateTime?)DateTime.UtcNow), ct);
         var unpinned = await db.PinnedMessages.Where(p => p.MessageId == id).ExecuteDeleteAsync(ct);
-        if (MediaKeys.Parse(await db.Messages.Where(m => m.Id == id).Select(m => m.MediaUrl).FirstOrDefaultAsync(ct)) is { } media)
+        var mediaInfo = await db.Messages.Where(m => m.Id == id).Select(m => new { m.MediaUrl, m.Kind }).FirstOrDefaultAsync(ct);
+        var kind = mediaInfo?.Kind;
+        if (MediaKeys.Parse(mediaInfo?.MediaUrl) is { } media)
         {
-            try { await storage.DeleteAsync(MediaKeys.Key(media.DialogId, media.Name), ct); }   // вложение удаляем вместе с сообщением
+            try
+            {
+                await storage.DeleteAsync(MediaKeys.Key(media.DialogId, media.Name), ct);   // вложение удаляем вместе с сообщением
+                if (kind == "video") await storage.DeleteAsync(MediaKeys.Key(media.DialogId, MediaKeys.Poster(media.Name)), ct);
+            }
             catch (Exception ex) { log.LogWarning(ex, "Could not delete media of message {Id}", id); }
         }
         var members = await access.GetMemberIdsAsync(dialogId, ct);
@@ -239,17 +245,17 @@ public sealed class MessagesController(
                 var newName = $"{id}.{ext}";
                 try
                 {
-                    await using var file = await storage.GetAsync(MediaKeys.Key(src.DialogId, src.Name), ct);
-                    if (file is not null)
+                    // копия на стороне хранилища (видео в десятки мегабайт через API не гоняем); у копии свой файл: удаление оригинала её не ломает
+                    await storage.CopyAsync(MediaKeys.Key(src.DialogId, src.Name), MediaKeys.Key(req.ToDialogId, newName), ct);
+                    mediaUrl = MediaKeys.Url(req.ToDialogId, newName);
+                    if (m.Kind == "video")
                     {
-                        var copy = new MemoryStream();
-                        await file.Content.CopyToAsync(copy, ct);
-                        copy.Position = 0;
-                        await storage.PutAsync(MediaKeys.Key(req.ToDialogId, newName), copy, copy.Length, MediaKeys.ContentType(ext), ct);
-                        mediaUrl = MediaKeys.Url(req.ToDialogId, newName);   // у копии свой файл: удаление оригинала её не ломает
+                        try { await storage.CopyAsync(MediaKeys.Key(src.DialogId, MediaKeys.Poster(src.Name)), MediaKeys.Key(req.ToDialogId, MediaKeys.Poster(newName)), ct); }
+                        catch (Exception) { /* превью необязательно */ }
                     }
                 }
                 catch (StorageNotConfiguredException) { return Problem(statusCode: StatusCodes.Status503ServiceUnavailable, title: "File storage is not available"); }
+                catch (Exception ex) when (ex is not OperationCanceledException) { log.LogWarning(ex, "Could not copy media {Key} while forwarding", src.Name); }   // оригинала нет — перешлём без вложения
             }
             var saved = await messages.SaveAsync(new NewMessage(
                 Id: id,
@@ -326,6 +332,90 @@ public sealed class MessagesController(
         if (!saved.IsNew)
         {
             await storage.DeleteAsync(key, ct);   // повтор того же запроса: лишний файл не оставляем
+            return Ok(saved.Message);
+        }
+        await hub.Clients.Users(await access.GetMemberIdsAsync(dialogId, ct)).SendAsync("MessageReceived", saved.Message, ct);
+        return Ok(saved.Message);
+    }
+
+    private const int MaxVideoBytes = 50 * 1024 * 1024;
+
+    /// <summary>
+    /// Отправка видео, шаг 1 из 3. Клиент сообщает тип, размер (≤ 50 МБ) и длительность (≤ 3 мин), сервер возвращает временную ссылку:
+    /// шаг 2 — клиент делает PUT файла прямо в хранилище (Content-Type как в ответе); шаг 3 — POST .../messages/video подтверждает загрузку.
+    /// Поддерживаются MP4 (в том числе .mov с H.264) и WebM; сервер видео не перекодирует.
+    /// </summary>
+    [HttpPost("api/dialogs/{dialogId}/video/upload")]
+    public async Task<ActionResult<VideoUploadDto>> VideoUpload(string dialogId, VideoUploadRequest req, CancellationToken ct)
+    {
+        if (!await access.IsMemberAsync(dialogId, User.GetUserId(), ct)) return NotFound();
+        var (ext, contentType) = req.ContentType switch
+        {
+            "video/mp4" or "video/quicktime" => ("mp4", "video/mp4"),
+            "video/webm" => ("webm", "video/webm"),
+            _ => ((string?)null, (string?)null),
+        };
+        if (ext is null || contentType is null || req.Size > MaxVideoBytes)
+            return Problem(statusCode: StatusCodes.Status400BadRequest, title: "Only MP4 and WebM video up to 50 MB is supported");
+        var fileId = Ulid.NewUlid().ToString();
+        var expires = DateTime.UtcNow.AddMinutes(15);
+        try { return new VideoUploadDto(fileId, ext, storage.GetUploadUrl(MediaKeys.Key(dialogId, $"{fileId}.{ext}"), contentType, TimeSpan.FromMinutes(15)), contentType, expires); }
+        catch (StorageNotConfiguredException) { return Problem(statusCode: StatusCodes.Status503ServiceUnavailable, title: "File storage is not available"); }
+    }
+
+    /// <summary>
+    /// Шаг 3: проверяет, что файл действительно загружен (есть в хранилище, ≤ 50 МБ, первые байты — MP4/WebM),
+    /// сохраняет превью и создаёт сообщение kind = "video". Идемпотентно по clientMessageId.
+    /// </summary>
+    [HttpPost("api/dialogs/{dialogId}/messages/video"), RequestSizeLimit(3 * 1024 * 1024), RequestFormLimits(MultipartBodyLengthLimit = 3 * 1024 * 1024)]
+    public async Task<ActionResult<MessageDto>> SendVideo(string dialogId, [FromForm] SendVideoForm form, CancellationToken ct)
+    {
+        var me = User.GetUserId();
+        if (!await access.IsMemberAsync(dialogId, me, ct)) return NotFound();
+        if (!Ulid.TryParse(form.FileId, out _) || form.Ext is not ("mp4" or "webm"))
+            return Problem(statusCode: StatusCodes.Status400BadRequest, title: "Invalid video reference");
+        if (form.ReplyToId is not null && (!Ulid.TryParse(form.ReplyToId, out _) || !await messages.ExistsInDialogAsync(dialogId, form.ReplyToId, ct)))
+            return Problem(statusCode: StatusCodes.Status400BadRequest, title: "invalid_reply_to");
+
+        var name = $"{form.FileId}.{form.Ext}";
+        var key = MediaKeys.Key(dialogId, name);
+        var posterKey = MediaKeys.Key(dialogId, MediaKeys.Poster(name));
+        try
+        {
+            var size = await storage.SizeAsync(key, ct);
+            if (size is null or <= 0 or > MaxVideoBytes)
+                return Problem(statusCode: StatusCodes.Status400BadRequest, title: "Uploaded video not found or larger than 50 MB");
+            var head = await storage.ReadStartAsync(key, 32, ct);
+            if (head is null || VideoFormat.Detect(head) is not { } fmt || fmt.Ext != form.Ext)
+            {
+                await storage.DeleteAsync(key, ct);   // загрузили не видео — файл не оставляем
+                return Problem(statusCode: StatusCodes.Status400BadRequest, title: "Unsupported video format (MP4 or WebM)");
+            }
+
+            if (form.Poster is { Length: > 0 and <= 2 * 1024 * 1024 })
+            {
+                try
+                {
+                    await using var s = form.Poster.OpenReadStream();
+                    var poster = await Task.Run(() => ImageProcessor.Poster(s), ct);
+                    await storage.PutAsync(posterKey, new MemoryStream(poster), poster.Length, "image/webp", ct);
+                }
+                catch (InvalidImageException) { /* кадр-превью необязателен: без него клиент покажет первый кадр самого видео */ }
+            }
+        }
+        catch (StorageNotConfiguredException) { return Problem(statusCode: StatusCodes.Status503ServiceUnavailable, title: "File storage is not available"); }
+
+        var url = MediaKeys.Url(dialogId, name);
+        var saved = await messages.SaveAsync(new NewMessage(
+            Id: Ulid.NewUlid().ToString(), ClientMessageId: form.ClientMessageId, DialogId: dialogId, SenderId: me, Text: (form.Text ?? "").Trim(),
+            MediaUrl: url, ReplyToId: form.ReplyToId, Kind: "video", MediaWidth: form.Width, MediaHeight: form.Height, MediaDurationMs: form.DurationMs), ct);
+        if (!saved.IsNew)
+        {
+            if (saved.Message.MediaUrl != url)   // повтор с другим файлом: лишние файлы не оставляем
+            {
+                await storage.DeleteAsync(key, ct);
+                await storage.DeleteAsync(posterKey, ct);
+            }
             return Ok(saved.Message);
         }
         await hub.Clients.Users(await access.GetMemberIdsAsync(dialogId, ct)).SendAsync("MessageReceived", saved.Message, ct);
