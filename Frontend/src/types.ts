@@ -7,13 +7,14 @@ export interface Profile extends User {
 export interface AuthResponse { accessToken: string; expiresAt: string; user: User }
 export interface MessageDto {
   id: string; clientMessageId: string; dialogId: string; senderId: string;
-  text: string; mediaUrl: string | null; createdAt: string;
+  text: string;
+  mediaUrl: string | null;            // путь к фото или голосовому (отдаётся только участникам, по токену)
+  createdAt: string;
   editedAt: string | null;
   replyToId?: string | null;          // ответ на сообщение этого же диалога
   forwardedFromId?: string | null;    // автор оригинала, если сообщение переслано
   forwardedFromName?: string | null;  // его имя на момент пересылки
   kind?: string;                      // text | image | voice | system (служебное: «Анна добавила Марка»)
-  mediaUrl?: string | null;           // путь к фото или голосовому (отдаётся только участникам, по токену)
   mediaWidth?: number | null;
   mediaHeight?: number | null;
   mediaDurationMs?: number | null;
