@@ -468,4 +468,4 @@ public sealed class MessagesController(
     }
 }
 
-public sealed record ReactionRequest([property: System.ComponentModel.DataAnnotations.Required] string Emoji);
+public sealed record ReactionRequest(string Emoji);
