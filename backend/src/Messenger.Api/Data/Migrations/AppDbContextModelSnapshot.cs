@@ -243,6 +243,51 @@ namespace Messenger.Api.Data.Migrations
                     b.ToTable("message_hides", (string)null);
                 });
 
+            modelBuilder.Entity("Messenger.Api.Domain.MessageReaction", b =>
+                {
+                    b.Property<string>("MessageId")
+                        .HasMaxLength(26)
+                        .HasColumnType("character varying(26)")
+                        .HasColumnName("message_id")
+                        .UseCollation("C");
+
+                    b.Property<string>("UserId")
+                        .HasMaxLength(26)
+                        .HasColumnType("character varying(26)")
+                        .HasColumnName("user_id")
+                        .UseCollation("C");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at")
+                        .HasDefaultValueSql("now()");
+
+                    b.Property<string>("DialogId")
+                        .IsRequired()
+                        .HasMaxLength(26)
+                        .HasColumnType("character varying(26)")
+                        .HasColumnName("dialog_id")
+                        .UseCollation("C");
+
+                    b.Property<string>("Emoji")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("character varying(16)")
+                        .HasColumnName("emoji");
+
+                    b.HasKey("MessageId", "UserId")
+                        .HasName("pk_message_reactions");
+
+                    b.HasIndex("DialogId")
+                        .HasDatabaseName("ix_message_reactions_dialog_id");
+
+                    b.HasIndex("UserId")
+                        .HasDatabaseName("ix_message_reactions_user_id");
+
+                    b.ToTable("message_reactions", (string)null);
+                });
+
             modelBuilder.Entity("Messenger.Api.Domain.PinnedMessage", b =>
                 {
                     b.Property<string>("DialogId")
@@ -465,6 +510,23 @@ namespace Messenger.Api.Data.Migrations
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired()
                         .HasConstraintName("fk_message_hides_users_user_id");
+                });
+
+            modelBuilder.Entity("Messenger.Api.Domain.MessageReaction", b =>
+                {
+                    b.HasOne("Messenger.Api.Domain.Message", null)
+                        .WithMany()
+                        .HasForeignKey("MessageId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired()
+                        .HasConstraintName("fk_message_reactions_messages_message_id");
+
+                    b.HasOne("Messenger.Api.Domain.User", null)
+                        .WithMany()
+                        .HasForeignKey("UserId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired()
+                        .HasConstraintName("fk_message_reactions_users_user_id");
                 });
 
             modelBuilder.Entity("Messenger.Api.Domain.PinnedMessage", b =>

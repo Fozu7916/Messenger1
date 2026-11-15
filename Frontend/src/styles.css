@@ -397,13 +397,11 @@ button{cursor:pointer}
 @keyframes pop{0%{transform:scale(.7)}60%{transform:scale(1.18)}100%{transform:scale(1)}}
 .rx button{animation:pop .22s ease-out}
 .msg.swiping::before{content:'↩';position:absolute;right:-34px;top:50%;margin-top:-12px;width:24px;height:24px;display:grid;place-items:center;border-radius:9999px;background:var(--accent);color:var(--accent-ink);font-size:14px;opacity:var(--sw,0);transform:scale(calc(.6 + var(--sw,0)*.4))}
-.qr{display:none}
-@media (hover:hover){
-  .qr{position:absolute;top:-34px;display:flex;gap:2px;padding:3px;border-radius:9999px;background:var(--surface);border:1px solid var(--line);box-shadow:var(--shadow);opacity:0;pointer-events:none;transform:translateY(4px);transition:opacity .12s,transform .12s;z-index:5}
-  .msg.in .qr{left:0}.msg.out .qr{right:0}
-  .msg:hover .qr,.qr:focus-within{opacity:1;pointer-events:auto;transform:none}
-  .qr button{border:0;background:transparent;border-radius:9999px;padding:3px 5px;font-size:17px;line-height:1;transition:transform .1s}
-  .qr button:hover{transform:scale(1.25);background:var(--surface2)}
-  .qr button.on{background:var(--accent-soft)}
-}
+.qr{position:absolute;top:-34px;display:flex;gap:2px;padding:3px;border-radius:9999px;background:var(--surface);border:1px solid var(--line);box-shadow:var(--shadow);opacity:0;pointer-events:none;transform:translateY(4px);transition:opacity .12s,transform .12s;z-index:5;white-space:nowrap}
+.msg.in .qr{left:0}.msg.out .qr{right:0}
+.msg:hover .qr,.qr:focus-within{opacity:1;pointer-events:auto;transform:none}
+.qr button{border:0;background:transparent;border-radius:9999px;padding:3px 5px;font-size:17px;line-height:1;transition:transform .1s}
+.qr button:hover{transform:scale(1.25);background:var(--surface2)}
+.qr button.on{background:var(--accent-soft)}
+@media (hover:none){.qr{display:none}}
 @media (prefers-reduced-motion:reduce){.rx button{animation:none}.qr{transition:none}}

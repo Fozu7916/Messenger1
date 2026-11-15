@@ -44,6 +44,11 @@ namespace Messenger.Api.Data.Migrations
                 name: "ix_message_reactions_dialog_id",
                 table: "message_reactions",
                 column: "dialog_id");
+
+            migrationBuilder.CreateIndex(
+                name: "ix_message_reactions_user_id",
+                table: "message_reactions",
+                column: "user_id");
         }
 
         /// <inheritdoc />
