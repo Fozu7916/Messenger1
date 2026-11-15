@@ -84,28 +84,45 @@ export const MAX_VIDEO_MS = 180_000;
 
 export interface VideoMeta { width: number; height: number; durationMs: number; poster: Blob | null }
 
-/** Читает размеры и длительность видео и снимает кадр-превью. Бросает понятную ошибку, если браузер не умеет это видео (например, HEVC). */
+/**
+ * Читает размеры и длительность видео и снимает кадр-превью. Если не удался только кадр, возвращает poster = null
+ * (превью необязательно). Если браузер не понимает само видео — бросает ошибку с причиной (чаще всего кодек HEVC/H.265).
+ */
 export function captureVideoMeta(file: Blob): Promise<VideoMeta> {
   return new Promise((resolve, reject) => {
     const url = URL.createObjectURL(file);
     const v = document.createElement('video');
-    v.preload = 'metadata'; v.muted = true; v.playsInline = true;
-    const finish = (fn: () => void) => { clearTimeout(timer); v.removeAttribute('src'); v.load(); URL.revokeObjectURL(url); fn(); };
-    const fail = () => finish(() => reject(new Error('Браузер не смог прочитать это видео (формат не поддерживается). Подойдёт MP4 с H.264 или WebM.')));
-    const timer = window.setTimeout(fail, 12000);
-    v.onerror = fail;
+    v.preload = 'auto'; v.muted = true; v.playsInline = true;
+    let done = false;
+    let seekTimer: number | undefined;
+    const cleanup = () => {
+      clearTimeout(overall); clearTimeout(seekTimer);
+      v.onerror = null; v.onloadedmetadata = null; v.onseeked = null;
+      v.removeAttribute('src'); v.load(); URL.revokeObjectURL(url);
+    };
+    const ok = (meta: VideoMeta) => { if (done) return; done = true; cleanup(); resolve(meta); };
+    const fail = (msg: string) => { if (done) return; done = true; cleanup(); reject(new Error(msg)); };
+    const overall = window.setTimeout(() => fail('Не удалось прочитать видео за разумное время. Попробуйте файл поменьше или другой формат.'), 20000);
+    const info = () => ({ width: v.videoWidth, height: v.videoHeight, durationMs: Math.round(v.duration * 1000) });
+    const snapshot = () => {
+      try {
+        const scale = Math.min(1, 640 / Math.max(v.videoWidth, v.videoHeight));
+        const canvas = document.createElement('canvas');
+        canvas.width = Math.max(1, Math.round(v.videoWidth * scale)); canvas.height = Math.max(1, Math.round(v.videoHeight * scale));
+        canvas.getContext('2d')?.drawImage(v, 0, 0, canvas.width, canvas.height);
+        canvas.toBlob((poster) => ok({ ...info(), poster }), 'image/jpeg', 0.75);
+      } catch { ok({ ...info(), poster: null }); }
+    };
+    v.onerror = () => fail(v.error?.code === 4
+      ? 'Браузер не поддерживает кодек этого видео (часто это HEVC/H.265). Перекодируйте в H.264 (MP4) или WebM.'
+      : 'Браузер не смог прочитать это видео.');
     v.onloadedmetadata = () => {
-      if (!v.videoWidth || !Number.isFinite(v.duration)) { fail(); return; }
+      if (!v.videoWidth || !v.videoHeight) { fail('Браузер не распознал видеодорожку: скорее всего, кодек HEVC/H.265 или AV1. Перекодируйте в H.264 (MP4) или WebM.'); return; }
+      if (!Number.isFinite(v.duration) || v.duration <= 0) { fail('В файле не указана длительность. Сохраните видео в MP4 (H.264) или WebM.'); return; }
+      seekTimer = window.setTimeout(() => ok({ ...info(), poster: null }), 3000);   // перемотка не сработала — отправим без превью
       v.currentTime = Math.min(1, v.duration / 2);   // кадр не из самого начала: там часто чёрный экран
     };
-    v.onseeked = () => {
-      const scale = Math.min(1, 640 / Math.max(v.videoWidth, v.videoHeight));
-      const canvas = document.createElement('canvas');
-      canvas.width = Math.max(1, Math.round(v.videoWidth * scale)); canvas.height = Math.max(1, Math.round(v.videoHeight * scale));
-      canvas.getContext('2d')?.drawImage(v, 0, 0, canvas.width, canvas.height);
-      const meta = { width: v.videoWidth, height: v.videoHeight, durationMs: Math.round(v.duration * 1000) };
-      canvas.toBlob((poster) => finish(() => resolve({ ...meta, poster })), 'image/jpeg', 0.75);
-    };
+    v.onseeked = () => { clearTimeout(seekTimer); snapshot(); };
     v.src = url;
   });
 }
