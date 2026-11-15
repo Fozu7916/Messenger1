@@ -261,7 +261,7 @@ button{cursor:pointer}
 .ctx button{display:block;width:100%;text-align:left;border:0;background:transparent;color:var(--ink);padding:10px 14px;border-radius:12px;font-size:15px}
 .ctx button:hover,.ctx button:focus-visible{background:var(--surface2);outline:none}
 .ctx button.danger{background:transparent;color:var(--danger);filter:none}
-.toast{position:fixed;left:50%;bottom:calc(24px + env(safe-area-inset-bottom,0px));transform:translateX(-50%);max-width:min(560px,92vw);background:var(--ink);color:var(--bg);border-radius:9999px;padding:12px 22px;font-size:14px;font-weight:500;z-index:40;box-shadow:var(--shadow);animation:rise .25s ease-out;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.toast{position:fixed;left:50%;bottom:calc(96px + env(safe-area-inset-bottom,0px));transform:translateX(-50%);max-width:min(560px,92vw);background:var(--ink);color:var(--bg);border-radius:9999px;padding:12px 22px;font-size:14px;font-weight:500;z-index:40;box-shadow:var(--shadow);animation:rise .25s ease-out;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 @keyframes rise{from{opacity:0;transform:translate(-50%,10px)}to{opacity:1;transform:translate(-50%,0)}}
 
 /* Планшет */
@@ -309,7 +309,7 @@ button{cursor:pointer}
   .modal-back{place-items:end center;padding:0}
   .modal{width:100%;max-height:88dvh;border-radius:28px 28px 0 0;padding:24px 20px calc(24px + env(safe-area-inset-bottom,0px))}
   .ctx{min-width:250px}.ctx button{padding:13px 14px}
-  .toast{bottom:calc(76px + env(safe-area-inset-bottom,0px))}
+  .toast{bottom:calc(88px + env(safe-area-inset-bottom,0px))}
   /* вход */
   .auth{grid-template-columns:minmax(0,1fr);min-height:100dvh}
   .hero{display:block}
@@ -405,3 +405,27 @@ button{cursor:pointer}
 .qr button.on{background:var(--accent-soft)}
 @media (hover:none){.qr{display:none}}
 @media (prefers-reduced-motion:reduce){.rx button{animation:none}.qr{transition:none}}
+
+/* ---- полировка: касания, нажатия, листы ---- */
+button{touch-action:manipulation;-webkit-tap-highlight-color:transparent}
+.row,.navbtn,.icbtn,.send,.rx button,.qr button{transition:background .12s,transform .1s,color .12s}
+.row:active,.navbtn:active,.icbtn:active{transform:scale(.97)}
+.send:active{transform:scale(.9)}
+.msg.mo{padding:4px 4px 3px}
+.msg.mo .imgb,.msg.mo .vidb{margin:0 0 2px;border-radius:calc(var(--br) - 4px)}
+.msg.mo .meta{padding:0 8px 2px}
+@keyframes sheet{from{transform:translateY(100%)}}
+@keyframes fade{from{opacity:0}}
+@media (hover:none){
+  .row:hover,.navbtn:hover{background:transparent}
+  .row[aria-current=true],.row[aria-selected=true]{background:var(--accent-soft)}
+  .navbtn[aria-selected=true]{background:var(--accent-soft)}
+}
+@media (max-width:760px){
+  .ctx-back{background:rgba(0,0,0,.4);animation:fade .15s ease-out}
+  .ctx{left:0!important;right:0;top:auto!important;bottom:0;width:100%;min-width:0;border-radius:24px 24px 0 0;padding:10px 12px calc(12px + env(safe-area-inset-bottom,0px));animation:sheet .22s cubic-bezier(.2,.8,.2,1)}
+  .ctx::before{content:'';display:block;width:36px;height:4px;border-radius:9999px;background:var(--line);margin:0 auto 10px}
+  .ctx button{padding:14px 16px;font-size:16px}
+  .rpick{justify-content:space-between;padding:2px 4px 10px}
+  .ctx .rpick button{width:auto;font-size:26px;padding:8px 10px}
+}

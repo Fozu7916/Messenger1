@@ -172,6 +172,7 @@ export function ChatsPage({ onFindPeople }: { onFindPeople: (q: string) => void 
     else if (db && activeId && dialogs.length && !active) setActiveId(null);
   }, [db, dialogs, activeId, renamed]);
   const me = session!.user.id;
+  const edge = useRef<{ x: number; y: number } | null>(null);
   return (
     <div className={'main ' + (active ? 'open' : '')}>
       <aside className="side">
@@ -198,7 +199,14 @@ export function ChatsPage({ onFindPeople }: { onFindPeople: (q: string) => void 
           {term && <button className="ghost more" onClick={() => onFindPeople(term)}>Искать «{term}» среди всех людей</button>}
         </div>
       </aside>
-      <section className="chat">
+      <section className="chat"
+        onTouchStart={(e) => { const t = e.touches[0]; edge.current = t.clientX < 28 && active && matchMedia('(max-width:760px)').matches ? { x: t.clientX, y: t.clientY } : null; }}
+        onTouchEnd={(e) => {
+          const s0 = edge.current; edge.current = null;
+          if (!s0) return;
+          const t = e.changedTouches[0], dx = t.clientX - s0.x, dy = Math.abs(t.clientY - s0.y);
+          if (dx > 80 && dx > dy * 2) setActiveId(null);   // свайп от левого края — назад к списку
+        }}>
         {active ? <ChatView key={active.id} dialog={active} onClose={() => setActiveId(null)} />
           : <div className="blank"><div><h2>Выберите диалог</h2><p>Или найдите собеседника в разделе «Люди».</p></div></div>}
       </section>
@@ -423,7 +431,7 @@ function ChatView({ dialog, onClose }: { dialog: DialogDoc; onClose: () => void 
     const t = e.touches[0];
     clearTimeout(press.current);
     swipe.current = { x: t.clientX, y: t.clientY, dx: 0, locked: false, buzzed: false };
-    press.current = window.setTimeout(() => setMenu({ x: t.clientX, y: t.clientY, m, sel: '' }), 500);
+    press.current = window.setTimeout(() => { try { navigator.vibrate?.(8); } catch { /* не поддерживается */ } setMenu({ x: t.clientX, y: t.clientY, m, sel: '' }); }, 500);
   };
   const touchEnd = () => clearTimeout(press.current);
   // Свайп влево по сообщению — ответить (как в Telegram)
@@ -476,7 +484,7 @@ function ChatView({ dialog, onClose }: { dialog: DialogDoc; onClose: () => void 
     return (
       <div key={m.clientMessageId} style={{ display: 'contents' }}>
         {sep && <div className="day"><span>{d}</span></div>}
-        <div id={m.id ? 'm-' + m.id : undefined} className={`msg ${out ? 'out' : 'in'} ${m.status}${gp ? ' gp' : ''}`}
+        <div id={m.id ? 'm-' + m.id : undefined} className={`msg ${out ? 'out' : 'in'} ${m.status}${gp ? ' gp' : ''}${(m.kind === 'image' || m.kind === 'video') && !m.text && !m.replyToId && !m.fwdFrom ? ' mo' : ''}`}
           onContextMenu={(e) => openMenu(e, m)} onTouchStart={(e) => touchStart(e, m)} onTouchEnd={(e) => touchFinish(e, m)} onTouchMove={touchMove} onTouchCancel={(e) => touchFinish(e, m, true)}
           onDoubleClick={(e) => {
             if (!m.id || m.status !== 'sent' || (e.target as HTMLElement).closest('button,a,audio,video')) return;
@@ -618,6 +626,10 @@ function ChatView({ dialog, onClose }: { dialog: DialogDoc; onClose: () => void 
             onKeyDown={(e) => {
               if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submit(); }
               else if (e.key === 'Escape') { if (editing) cancelEdit(); else if (replying) setReplying(null); }
+              else if (e.key === 'ArrowUp' && !editing && !e.currentTarget.value) {
+                const last = [...msgs].reverse().find((x) => x.senderId === me && x.status === 'sent' && (x.kind ?? 'text') === 'text' && x.text);
+                if (last) { e.preventDefault(); startEdit(last); }
+              }
             }} />
           {hasText || editing || !canRecord()
             ? (
