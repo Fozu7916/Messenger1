@@ -63,9 +63,11 @@ function ConfirmModal({ title, children, checkLabel, confirmLabel = 'Удали�
 }
 
 interface MenuItem { label: string; danger?: boolean; onClick: () => void }
+export const REACTIONS = ['👍', '❤️', '😂', '😮', '😢', '🔥'];
+interface Picker { current?: string; onPick: (emoji: string | null) => void }
 
 /** Контекстное меню сообщения (ПКМ, долгое нажатие или кнопка «⋯»): стрелки и Esc, закрывается при прокрутке и клике мимо. */
-function ContextMenu({ x, y, items, onClose }: { x: number; y: number; items: MenuItem[]; onClose: () => void }) {
+function ContextMenu({ x, y, items, picker, onClose }: { x: number; y: number; items: MenuItem[]; picker?: Picker; onClose: () => void }) {
   const ref = useRef<HTMLDivElement>(null);
   const [pos, setPos] = useState({ x, y });
   useLayoutEffect(() => {
@@ -96,6 +98,14 @@ function ContextMenu({ x, y, items, onClose }: { x: number; y: number; items: Me
   return createPortal(
     <div className="ctx-back" onMouseDown={onClose} onContextMenu={(e) => { e.preventDefault(); onClose(); }}>
       <div ref={ref} className="ctx" role="menu" style={{ left: pos.x, top: pos.y }} onMouseDown={(e) => e.stopPropagation()}>
+        {picker && (
+          <div className="rpick" role="group" aria-label="Реакция">
+            {REACTIONS.map((e) => (
+              <button key={e} role="menuitem" aria-pressed={picker.current === e} className={picker.current === e ? 'on' : ''}
+                onClick={() => { onClose(); picker.onPick(picker.current === e ? null : e); }}>{e}</button>
+            ))}
+          </div>
+        )}
         {items.map((it) => (
           <button key={it.label} role="menuitem" className={it.danger ? 'danger' : ''} onClick={() => { onClose(); it.onClick(); }}>{it.label}</button>
         ))}
@@ -201,7 +211,7 @@ interface MenuState { x: number; y: number; m: MessageDoc; sel: string }
 
 function ChatView({ dialog, onClose }: { dialog: DialogDoc; onClose: () => void }) {
   const { session } = useAuth();
-  const { status, typing, typingUser, members, loadMembers, sendMedia, presence, lastSeen, pins, send, retry, remove, edit, setPinned, loadPins, removeDialog, loadOlder, notifyTyping, setActive } = useChat();
+  const { status, typing, typingUser, members, loadMembers, sendMedia, presence, lastSeen, pins, send, retry, remove, edit, setPinned, loadPins, reactions, loadReactions, react, removeDialog, loadOlder, notifyTyping, setActive } = useChat();
   const toast = useToast();
   const me = session!.user.id;
   const raw = useLiveQuery<MessageDoc>((d) => d.messages.find({ selector: { dialogId: dialog.id } }), [dialog.id]);
@@ -241,6 +251,7 @@ function ChatView({ dialog, onClose }: { dialog: DialogDoc; onClose: () => void 
   useEffect(() => { setActive(dialog.id); return () => setActive(null); }, [dialog.id]);
   useEffect(() => { if (isGroup) loadMembers(dialog.id).catch(() => {}); }, [dialog.id, status === 'online']);
   useEffect(() => { loadPins(dialog.id).catch((e) => console.warn('pins load failed', e)); }, [dialog.id, status === 'online']);
+  useEffect(() => { loadReactions(dialog.id).catch((e) => console.warn('reactions load failed', e)); }, [dialog.id, status === 'online']);
   // позиция в истории: восстановление, «прилипание» к низу, сохранение якоря при подгрузке вверх
   useLayoutEffect(() => {
     const el = box.current; if (!el) return;
@@ -411,9 +422,41 @@ function ChatView({ dialog, onClose }: { dialog: DialogDoc; onClose: () => void 
   const touchStart = (e: RTouchEvent<HTMLElement>, m: MessageDoc) => {
     const t = e.touches[0];
     clearTimeout(press.current);
+    swipe.current = { x: t.clientX, y: t.clientY, dx: 0, locked: false, buzzed: false };
     press.current = window.setTimeout(() => setMenu({ x: t.clientX, y: t.clientY, m, sel: '' }), 500);
   };
   const touchEnd = () => clearTimeout(press.current);
+  // Свайп влево по сообщению — ответить (как в Telegram)
+  const swipe = useRef<{ x: number; y: number; dx: number; locked: boolean; buzzed: boolean } | null>(null);
+  const SWIPE_AT = 56;
+  const touchMove = (e: RTouchEvent<HTMLElement>) => {
+    touchEnd();
+    const s = swipe.current;
+    if (!s) return;
+    const t = e.touches[0], dx = s.x - t.clientX, dy = t.clientY - s.y;
+    if (!s.locked) {
+      if (Math.abs(dy) > 10 && Math.abs(dy) > Math.abs(dx)) { swipe.current = null; return; }   // это прокрутка
+      if (dx > 10 && dx > Math.abs(dy)) s.locked = true; else return;
+    }
+    s.dx = Math.min(72, Math.max(0, dx));
+    const el = e.currentTarget;
+    el.classList.add('swiping');
+    el.style.transition = 'none';
+    el.style.transform = `translateX(${-s.dx}px)`;
+    el.style.setProperty('--sw', String(Math.min(1, s.dx / SWIPE_AT)));
+    if (s.dx >= SWIPE_AT && !s.buzzed) { s.buzzed = true; try { navigator.vibrate?.(10); } catch { /* не поддерживается */ } }
+  };
+  const touchFinish = (e: RTouchEvent<HTMLElement>, m: MessageDoc, cancelled = false) => {
+    touchEnd();
+    const s = swipe.current; swipe.current = null;
+    if (!s?.locked) return;
+    const el = e.currentTarget;
+    el.style.transition = 'transform .18s ease-out'; el.style.transform = '';
+    window.setTimeout(() => { el.classList.remove('swiping'); el.style.transition = ''; el.style.removeProperty('--sw'); }, 200);
+    if (!cancelled && s.dx >= SWIPE_AT && m.id && m.status === 'sent') startReply(m);
+  };
+  const toggleReact = (m: MessageDoc, emoji: string) =>
+    react(m, reactions[m.id]?.[me] === emoji ? null : emoji).catch((er: Error) => toast(er.message));
 
   let day = '';
   const items = msgs.map((m, i) => {
@@ -434,7 +477,20 @@ function ChatView({ dialog, onClose }: { dialog: DialogDoc; onClose: () => void 
       <div key={m.clientMessageId} style={{ display: 'contents' }}>
         {sep && <div className="day"><span>{d}</span></div>}
         <div id={m.id ? 'm-' + m.id : undefined} className={`msg ${out ? 'out' : 'in'} ${m.status}${gp ? ' gp' : ''}`}
-          onContextMenu={(e) => openMenu(e, m)} onTouchStart={(e) => touchStart(e, m)} onTouchEnd={touchEnd} onTouchMove={touchEnd} onTouchCancel={touchEnd}>
+          onContextMenu={(e) => openMenu(e, m)} onTouchStart={(e) => touchStart(e, m)} onTouchEnd={(e) => touchFinish(e, m)} onTouchMove={touchMove} onTouchCancel={(e) => touchFinish(e, m, true)}
+          onDoubleClick={(e) => {
+            if (!m.id || m.status !== 'sent' || (e.target as HTMLElement).closest('button,a,audio,video')) return;
+            window.getSelection()?.removeAllRanges();
+            toggleReact(m, '👍');
+          }}>
+          {m.id && m.status === 'sent' && (
+            <div className="qr" role="group" aria-label="Быстрая реакция">
+              {REACTIONS.map((e) => (
+                <button key={e} className={reactions[m.id]?.[me] === e ? 'on' : ''} aria-label={'Реакция ' + e} aria-pressed={reactions[m.id]?.[me] === e}
+                  onClick={() => toggleReact(m, e)}>{e}</button>
+              ))}
+            </div>
+          )}
           {isGroup && !out && !gp && <div className="sname" style={{ ['--h' as string]: hue(m.senderId) }}>{nameOf(m.senderId)}</div>}
           {m.fwdFrom && <div className="fwd">Переслано от <b>{m.fwdFrom}</b></div>}
           {m.replyToId && (
@@ -453,6 +509,14 @@ function ChatView({ dialog, onClose }: { dialog: DialogDoc; onClose: () => void 
             {m.id && (pins[dialog.id] ?? []).includes(m.id) && ' · закреплено'}
             {out && state}
           </span>
+          {m.id && reactions[m.id] && (
+            <div className="rx">
+              {Object.entries(Object.values(reactions[m.id]).reduce<Record<string, number>>((a, e) => ({ ...a, [e]: (a[e] ?? 0) + 1 }), {})).map(([e, n]) => (
+                <button key={e + n} className={reactions[m.id][me] === e ? 'mine' : ''} aria-pressed={reactions[m.id][me] === e}
+                  onClick={() => toggleReact(m, e)}>{e} {n}</button>
+              ))}
+            </div>
+          )}
           {out && m.status === 'failed' && <button className="retry" onClick={() => retry(m)}>Повторить</button>}
           <button className="x more" aria-label="Действия с сообщением" title="Действия"
             onClick={(e) => { const r = e.currentTarget.getBoundingClientRect(); setMenu({ x: r.left, y: r.bottom + 4, m, sel: '' }); }}><Dots /></button>
@@ -566,7 +630,7 @@ function ChatView({ dialog, onClose }: { dialog: DialogDoc; onClose: () => void 
             : <button className="send" onClick={() => void startVoice()} aria-label="Записать голосовое" title="Голосовое сообщение"><Mic /></button>}
         </div>
       </div>
-      {menu && <ContextMenu x={menu.x} y={menu.y} items={menuItems(menu)} onClose={() => setMenu(null)} />}
+      {menu && <ContextMenu x={menu.x} y={menu.y} items={menuItems(menu)} picker={menu.m.id && menu.m.status === 'sent' ? { current: reactions[menu.m.id]?.[me], onPick: (e) => react(menu.m, e).catch((er: Error) => toast(er.message)) } : undefined} onClose={() => setMenu(null)} />}
       {fwd && <ForwardModal msg={fwd} onClose={() => setFwd(null)} onDone={() => setFwd(null)} />}
       {profile && <PeerProfile peer={dialog.peer} online={peerOnline} onClose={() => setProfile(false)} />}
       {groupInfo && <GroupInfo dialog={dialog} onClose={() => setGroupInfo(false)} onLeft={() => { setGroupInfo(false); onClose(); }} />}

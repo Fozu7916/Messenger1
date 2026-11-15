@@ -1,3 +1,4 @@
+import { AvatarCropper } from './AvatarCropper';
 import { useEffect, useRef, useState } from 'react';
 import * as api from '../lib/api';
 import { useAuth } from '../lib/auth';
@@ -88,12 +89,14 @@ export function GroupInfo({ dialog, onClose, onLeft }: { dialog: DialogDoc; onCl
     setBusy(true);
     try { await fn(); await resync(); await loadMembers(dialog.id); if (done) toast(done); } catch (e) { toast((e as Error).message); } finally { setBusy(false); }
   };
+  const [crop, setCrop] = useState<File | null>(null);
   const pickAvatar = (f?: File) => {
     if (file.current) file.current.value = '';
-    if (f) void run(() => api.uploadGroupAvatar(dialog.id, f), 'Фото беседы обновлено');
+    if (f) setCrop(f);
   };
   return (
     <Modal title="Беседа" onClose={onClose}>
+      {crop && <AvatarCropper file={crop} onClose={() => setCrop(null)} onDone={(c) => { setCrop(null); void run(() => api.uploadGroupAvatar(dialog.id, c), 'Фото беседы обновлено'); }} />}
       <div className="pcard">
         <Avatar name={dialog.peer.displayName} url={dialog.peer.avatarUrl} size={96} />
         <div className="hint">{membersLabel(list.length || dialog.memberCount)}</div>

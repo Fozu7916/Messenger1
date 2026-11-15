@@ -207,6 +207,51 @@ public sealed class MessagesController(
         return NoContent();
     }
 
+    private static readonly string[] AllowedReactions = ["👍", "❤️", "😂", "😮", "😢", "🔥"];
+
+    /// <summary>Реакции диалога (последние 3000): [{messageId, userId, emoji}].</summary>
+    [HttpGet("api/dialogs/{dialogId}/reactions")]
+    public async Task<IActionResult> GetReactions(string dialogId, CancellationToken ct)
+    {
+        if (!await access.IsMemberAsync(dialogId, User.GetUserId(), ct)) return NotFound();
+        var list = await db.MessageReactions.AsNoTracking().Where(r => r.DialogId == dialogId)
+            .OrderByDescending(r => r.CreatedAt).Take(3000)
+            .Select(r => new { messageId = r.MessageId, userId = r.UserId, emoji = r.Emoji }).ToListAsync(ct);
+        return Ok(list);
+    }
+
+    /// <summary>Ставит (или заменяет) мою реакцию. Участникам уходит ReactionChanged(dialogId, messageId, userId, emoji).</summary>
+    [HttpPut("api/dialogs/{dialogId}/reactions/{messageId}")]
+    public async Task<IActionResult> SetReaction(string dialogId, string messageId, [FromBody] ReactionRequest body, CancellationToken ct)
+    {
+        var me = User.GetUserId();
+        if (!await access.IsMemberAsync(dialogId, me, ct)) return NotFound();
+        if (!Ulid.TryParse(messageId, out _)) return NotFound();
+        if (!AllowedReactions.Contains(body.Emoji)) return Problem(statusCode: StatusCodes.Status400BadRequest, title: "Unsupported reaction");
+        if ((await messages.GetByIdsAsync(dialogId, me, [messageId], ct)).Count == 0) return NotFound();
+
+        await db.Database.ExecuteSqlInterpolatedAsync(
+            $"INSERT INTO message_reactions (message_id, user_id, dialog_id, emoji) VALUES ({messageId}, {me}, {dialogId}, {body.Emoji}) ON CONFLICT (message_id, user_id) DO UPDATE SET emoji = EXCLUDED.emoji, created_at = now()", ct);
+        var members = await access.GetMemberIdsAsync(dialogId, ct);
+        await hub.Clients.Users(members).SendAsync("ReactionChanged", dialogId, messageId, me, body.Emoji, ct);
+        return NoContent();
+    }
+
+    /// <summary>Убирает мою реакцию. Участникам уходит ReactionChanged(dialogId, messageId, userId, null).</summary>
+    [HttpDelete("api/dialogs/{dialogId}/reactions/{messageId}")]
+    public async Task<IActionResult> RemoveReaction(string dialogId, string messageId, CancellationToken ct)
+    {
+        var me = User.GetUserId();
+        if (!await access.IsMemberAsync(dialogId, me, ct)) return NotFound();
+        var removed = await db.MessageReactions.Where(r => r.DialogId == dialogId && r.MessageId == messageId && r.UserId == me).ExecuteDeleteAsync(ct);
+        if (removed > 0)
+        {
+            var members = await access.GetMemberIdsAsync(dialogId, ct);
+            await hub.Clients.Users(members).SendAsync("ReactionChanged", dialogId, messageId, me, (string?)null, ct);
+        }
+        return NoContent();
+    }
+
     /// <summary>
     /// Пересылка сообщений из диалога dialogId в toDialogId (оба — мои). Копии получают ForwardedFromId/Name оригинального автора
     /// (при повторной пересылке сохраняется первый автор). Идемпотентно по clientBatchId. Получателям уходит MessageReceived.
@@ -422,3 +467,5 @@ public sealed class MessagesController(
         return Ok(saved.Message);
     }
 }
+
+public sealed record ReactionRequest([property: System.ComponentModel.DataAnnotations.Required] string Emoji);

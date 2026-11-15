@@ -121,6 +121,9 @@ export const messages = (dialogId: string, p: { after?: string; before?: string;
 };
 export const pins = (dialogId: string) => req<MessageDto[]>('GET', `/api/dialogs/${dialogId}/pins`);
 export const pin = (dialogId: string, id: string) => req<void>('PUT', `/api/dialogs/${dialogId}/pins/${id}`);
+export const reactions = (dialogId: string) => req<{ messageId: string; userId: string; emoji: string }[]>('GET', `/api/dialogs/${dialogId}/reactions`);
+export const react = (dialogId: string, id: string, emoji: string) => req<void>('PUT', `/api/dialogs/${dialogId}/reactions/${id}`, { emoji });
+export const unreact = (dialogId: string, id: string) => req<void>('DELETE', `/api/dialogs/${dialogId}/reactions/${id}`);
 export const unpin = (dialogId: string, id: string) => req<void>('DELETE', `/api/dialogs/${dialogId}/pins/${id}`);
 // Пересылка до 50 сообщений в другой свой диалог; clientBatchId делает повтор безопасным
 export const forward = (dialogId: string, v: { toDialogId: string; messageIds: string[]; clientBatchId: string }) =>

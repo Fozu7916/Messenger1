@@ -101,3 +101,13 @@ public class PinnedMessage
     public string PinnedById { get; set; } = "";
     public DateTime PinnedAt { get; set; } = DateTime.UtcNow;
 }
+
+/// <summary>Реакция пользователя на сообщение (одна на пользователя: новая заменяет прежнюю).</summary>
+public class MessageReaction
+{
+    public string MessageId { get; set; } = "";
+    public string UserId { get; set; } = "";
+    public string DialogId { get; set; } = "";
+    public string Emoji { get; set; } = "";
+    public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+}

@@ -24,9 +24,8 @@
 | Слой | Стек |
 |------|------|
 | Frontend | React, TypeScript, RxDB (IndexedDB) |
-| Proxy | Nginx |
 | Backend | C# .NET 10, SignalR (WSS), REST API, EF Core + Dapper |
-| Данные | PostgreSQL (ULID, партиционирование), Redis (backplane, presence), S3 |
+| Данные | PostgreSQL (ULID), Redis (backplane, presence), S3 |
 
 ## Структура репозитория
 

@@ -13,6 +13,7 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
     public DbSet<Message> Messages => Set<Message>();
     public DbSet<MessageHide> MessageHides => Set<MessageHide>();
     public DbSet<PinnedMessage> PinnedMessages => Set<PinnedMessage>();
+    public DbSet<MessageReaction> MessageReactions => Set<MessageReaction>();
 
     // ULID — 26 символов Crockford Base32. Лексикографический порядок == хронологический,
     // но только при коллации "C" (побайтовое сравнение), поэтому задаём её явно.
@@ -114,6 +115,19 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
             e.HasOne<Message>().WithMany().HasForeignKey(x => x.MessageId).OnDelete(DeleteBehavior.Cascade);
             e.HasIndex(x => new { x.DialogId, x.PinnedAt });
             e.HasIndex(x => x.MessageId);
+        });
+        b.Entity<MessageReaction>(e =>
+        {
+            e.ToTable("message_reactions");
+            e.HasKey(x => new { x.MessageId, x.UserId });
+            UlidColumn(e.Property(x => x.MessageId));
+            UlidColumn(e.Property(x => x.UserId));
+            UlidColumn(e.Property(x => x.DialogId));
+            e.Property(x => x.Emoji).HasMaxLength(16);
+            e.Property(x => x.CreatedAt).HasDefaultValueSql("now()");
+            e.HasOne<Message>().WithMany().HasForeignKey(x => x.MessageId).OnDelete(DeleteBehavior.Cascade);
+            e.HasOne<User>().WithMany().HasForeignKey(x => x.UserId).OnDelete(DeleteBehavior.Cascade);
+            e.HasIndex(x => x.DialogId);
         });
         b.Entity<MessageHide>(e =>
         {

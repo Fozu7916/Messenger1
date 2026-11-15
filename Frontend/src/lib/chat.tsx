@@ -32,6 +32,9 @@ interface Chat {
   remove(m: MessageDoc, scope: 'me' | 'all'): Promise<void>;
   edit(m: MessageDoc, text: string): Promise<void>;
   forward(list: MessageDoc[], toDialogId: string): Promise<void>;
+  reactions: Record<string, Record<string, string>>;   // messageId → (userId → emoji)
+  loadReactions(dialogId: string): Promise<void>;
+  react(m: MessageDoc, emoji: string | null): Promise<void>;
   loadPins(dialogId: string): Promise<void>;
   setPinned(m: MessageDoc, pinned: boolean): Promise<void>;
   startDialog(user: User): Promise<string>;
@@ -91,6 +94,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   const [lastSeen, setLastSeen] = useState<Record<string, number>>({});
   const [renamed, setRenamed] = useState<Record<string, string>>({});
   const [pins, setPins] = useState<Record<string, string[]>>({});
+  const [reactions, setReactions] = useState<Record<string, Record<string, string>>>({});
   const [typingUser, setTypingUser] = useState<Record<string, string>>({});
   const [members, setMembers] = useState<Record<string, Member[]>>({});
   const membersRef = useRef(members); membersRef.current = members;
@@ -119,6 +123,25 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   const dropPin = (messageId: string) =>
     setPins((p) => Object.fromEntries(Object.entries(p).map(([k, v]) => [k, v.filter((x) => x !== messageId)])));
   // Закреплённые приходят с сервера (общие для обоих участников); сами сообщения кладём в локальную БД, чтобы показать текст
+  const putReaction = (messageId: string, userId: string, emoji: string | null) =>
+    setReactions((r) => {
+      const cur = { ...(r[messageId] ?? {}) };
+      if (emoji) cur[userId] = emoji; else delete cur[userId];
+      const n = { ...r };
+      if (Object.keys(cur).length) n[messageId] = cur; else delete n[messageId];
+      return n;
+    });
+  const loadReactions = async (dialogId: string) => {
+    if (isTemp(dialogId)) return;
+    const list = await api.reactions(dialogId);
+    setReactions((r) => {
+      const n: Record<string, Record<string, string>> = {};
+      const ids = new Set(list.map((x) => x.messageId));
+      for (const [k, v] of Object.entries(r)) if (!ids.has(k)) n[k] = v;   // остальные диалоги не трогаем
+      for (const x of list) (n[x.messageId] ??= {})[x.userId] = x.emoji;
+      return n;
+    });
+  };
   const loadPins = async (dialogId: string) => {
     if (isTemp(dialogId) || !dbRef.current) return;
     const list = await api.pins(dialogId);
@@ -382,6 +405,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         await upsertMessages([m]);
         setPins((p) => ({ ...p, [did]: [m.id, ...(p[did] ?? []).filter((x) => x !== m.id)] }));
       });
+      hub.on('ReactionChanged', (_did: string, messageId: string, userId: string, emoji: string | null) => putReaction(messageId, userId, emoji));
       hub.on('MessageUnpinned', (_did: string, messageId: string) => dropPin(messageId));
       hub.on('MessagesRead', async (did: string, uid: string, upTo: string) => {
         const doc = await d.dialogs.findOne(did).exec();
@@ -428,7 +452,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
 
   // ---------- Действия интерфейса ----------
   const value: Chat = {
-    db, dbError, error, status, typing, typingUser, members, loadMembers, presence, lastSeen, renamed, pins,
+    db, dbError, error, status, typing, typingUser, members, loadMembers, presence, lastSeen, renamed, pins, reactions, loadReactions,
     createGroup: async (title, memberIds) => { const dto = await api.createGroup(title, memberIds); await sync(); return dto.id; },
     sendMedia: (dialogId, kind, file, opts) => {
       const cid = newId();
@@ -487,6 +511,11 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       }
       const batch = newId().replace(/-/g, '').slice(0, 32);
       await upsertMessages(await api.forward(sent[0].dialogId, { toDialogId: to, messageIds: sent.map((m) => m.id), clientBatchId: batch }));
+    },
+    react: async (m, emoji) => {
+      if (!m.id) return;
+      if (emoji) await api.react(m.dialogId, m.id, emoji); else await api.unreact(m.dialogId, m.id);
+      putReaction(m.id, me.id, emoji);
     },
     loadPins,
     setPinned: async (m, pinned) => {

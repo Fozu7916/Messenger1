@@ -6,6 +6,7 @@ import { beep, desktopSupported, enableDesktop, getNotifyPrefs, setNotifyPrefs }
 import { ACCENTS, PRESETS, presetCss, reset as resetAppearance, update as setAppearance, useAppearance, useWallpaperUrl, type Bubble, type Density, type FontFamily, type ThemeMode } from '../lib/theme';
 import type { Profile } from '../types';
 import { Avatar, useToast } from './ui';
+import { AvatarCropper } from './AvatarCropper';
 
 type Section = 'profile' | 'security' | 'appearance' | 'notify' | 'device';
 const GROUPS: { title: string; items: [Section, string, string][] }[] = [
@@ -87,11 +88,15 @@ function ProfileSection() {
     } catch (x) { setErr((x as Error).message); }
     finally { setBusy(false); }
   };
-  const pick = async (f?: File) => {
+  const [crop, setCrop] = useState<File | null>(null);
+  const pick = (f?: File) => {
     if (file.current) file.current.value = '';
     if (!f) return;
     if (f.size > 5 * 1024 * 1024) { toast('Файл больше 5 МБ'); return; }
-    setPhotoBusy(true);
+    setCrop(f);
+  };
+  const uploadCropped = async (f: File) => {
+    setCrop(null); setPhotoBusy(true);
     try { applyProfile(await api.uploadAvatar(f)); toast('Фото обновлено'); } catch (x) { toast(uploadError(x)); } finally { setPhotoBusy(false); }
   };
   const removePhoto = async () => {
@@ -107,7 +112,8 @@ function ProfileSection() {
           <div className="me-name">{name.trim() || '—'}</div>
           <div className="hint">@{u.login}{saved && ` · с ${new Date(saved.createdAt).toLocaleDateString('ru', { month: 'long', year: 'numeric' })}`}</div>
           <div className="actions left avedit">
-            <input ref={file} type="file" accept="image/jpeg,image/png,image/webp,image/gif" hidden onChange={(e) => void pick(e.target.files?.[0])} />
+            <input ref={file} type="file" accept="image/jpeg,image/png,image/webp,image/gif" hidden onChange={(e) => pick(e.target.files?.[0])} />
+            {crop && <AvatarCropper file={crop} onDone={(c) => void uploadCropped(c)} onClose={() => setCrop(null)} />}
             <button type="button" className="ghost" disabled={photoBusy} onClick={() => file.current?.click()}>{photoBusy ? 'Загружаем…' : u.avatarUrl ? 'Сменить фото' : 'Загрузить фото'}</button>
             {u.avatarUrl && <button type="button" className="ghost" disabled={photoBusy} onClick={() => void removePhoto()}>Удалить</button>}
           </div>
