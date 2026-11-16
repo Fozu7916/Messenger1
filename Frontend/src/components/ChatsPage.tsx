@@ -146,12 +146,70 @@ function ForwardModal({ msg, onClose, onDone }: { msg: MessageDoc; onClose: () =
   );
 }
 
+const ACT_W = 88;
+/** Строка списка со свайпом влево: открывает красную кнопку действия (на сенсорных экранах). */
+function SwipeRow({ label, onAction, children }: { label: string; onAction: () => void; children: ReactNode }) {
+  const [x, setX] = useState(0);
+  const [drag, setDrag] = useState(false);
+  const st = useRef<{ x: number; y: number; base: number; lock: boolean } | null>(null);
+  const end = () => {
+    const s0 = st.current; st.current = null;
+    if (!s0?.lock) return;
+    setDrag(false); setX((v) => (v < -ACT_W / 2 ? -ACT_W : 0));
+  };
+  return (
+    <div className="swrow">
+      <button className={'swact' + (x < 0 || drag ? ' on' : '')} tabIndex={x < 0 ? 0 : -1} onClick={() => { setX(0); onAction(); }}>{label}</button>
+      <div className="swin" style={{ transform: `translateX(${x}px)`, transition: drag ? 'none' : 'transform .2s ease-out' }}
+        onTouchStart={(e) => { const t = e.touches[0]; st.current = { x: t.clientX, y: t.clientY, base: x, lock: false }; }}
+        onTouchMove={(e) => {
+          const s0 = st.current;
+          if (!s0) return;
+          const t = e.touches[0], dx = t.clientX - s0.x, dy = t.clientY - s0.y;
+          if (!s0.lock) {
+            if (Math.abs(dy) > 10 && Math.abs(dy) > Math.abs(dx)) { st.current = null; return; }   // это прокрутка списка
+            if (Math.abs(dx) > 10) { s0.lock = true; setDrag(true); } else return;
+          }
+          setX(Math.min(0, Math.max(-ACT_W, s0.base + dx)));
+        }}
+        onTouchEnd={end} onTouchCancel={end}
+        onClickCapture={(e) => { if (x !== 0) { e.preventDefault(); e.stopPropagation(); setX(0); } }}>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+const EMOJI = ['😀', '😂', '🥹', '😍', '🥰', '😘', '😎', '🤔', '😅', '😭', '😡', '🥳', '😴', '🤯', '😬', '🙄',
+  '👍', '👎', '👏', '🙏', '💪', '🤝', '👀', '🔥', '❤️', '💔', '✨', '🎉', '💯', '✅', '❌', '⚡',
+  '🌟', '☕', '🍕', '🎮', '🎧', '📷', '💻', '🚀', '🐱', '🐶', '😺', '🌈', '🍀', '🎂', '🏆', '🫶'];
+
+/** Всплывающая панель эмодзи у кнопки в поле ввода. Закрывается по клику вне панели и по Esc. */
+function EmojiPop({ anchor, onPick, onClose }: { anchor: DOMRect; onPick: (e: string) => void; onClose: () => void }) {
+  useEffect(() => {
+    const k = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+    document.addEventListener('keydown', k);
+    return () => document.removeEventListener('keydown', k);
+  }, []);
+  return createPortal(
+    <div className="emo-back" onMouseDown={onClose}>
+      <div className="emopop" role="dialog" aria-label="Эмодзи" onMouseDown={(e) => e.stopPropagation()}
+        style={{ right: Math.max(8, window.innerWidth - anchor.right), bottom: window.innerHeight - anchor.top + 8 }}>
+        {EMOJI.map((e) => <button key={e} onClick={() => onPick(e)}>{e}</button>)}
+      </div>
+    </div>,
+    document.body,
+  );
+}
+
 interface Hit { key: string; id: string; senderId: string; text: string; createdAt: number }
 
 /** «Чаты»: список диалогов с поиском по имени или логину собеседника. Поиск по тексту — внутри самого чата (лупа в шапке). */
 export function ChatsPage({ onFindPeople }: { onFindPeople: (q: string) => void }) {
   const { session } = useAuth();
-  const { db, presence, renamed } = useChat();
+  const { db, presence, renamed, removeDialog } = useChat();
+  const toast = useToast();
+  const [delRow, setDelRow] = useState<DialogDoc | null>(null);
   const [activeId, setActiveId] = usePersisted<string | null>('dialog', null);
   const [q, setQ] = useState('');
   const [newGroup, setNewGroup] = useState(false);
@@ -182,8 +240,15 @@ export function ChatsPage({ onFindPeople }: { onFindPeople: (q: string) => void 
         </div>
         <input className="field search" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Имя или логин собеседника" aria-label="Поиск по собеседникам" />
         <div className="list">
+          {!db && Array.from({ length: 7 }, (_, i) => (
+            <div key={i} className="skrow" aria-hidden="true">
+              <div className="sk av" />
+              <div style={{ flex: 1 }}><div className="sk l1" /><div className="sk l2" style={{ width: `${45 + (i * 13) % 40}%` }} /></div>
+            </div>
+          ))}
           {shownRows.map(({ d, last }) => (
-            <button key={d.id} className="row" aria-current={d.id === activeId} onClick={() => setActiveId(d.id)}>
+            <SwipeRow key={d.id} label={d.kind === 'group' ? (d.myRole === 'owner' ? 'Удалить' : 'Выйти') : 'Удалить'} onAction={() => setDelRow(d)}>
+            <button className="row" aria-current={d.id === activeId} onClick={() => setActiveId(d.id)}>
               <Avatar name={d.peer.displayName} url={d.peer.avatarUrl} online={presence[d.peer.id] ?? false} size={46} />
               <div className="t">
                 <div className="n">{d.peer.displayName}<small>{last ? fmtTime(last.createdAt) : ''}</small></div>
@@ -193,8 +258,9 @@ export function ChatsPage({ onFindPeople }: { onFindPeople: (q: string) => void 
                 </div>
               </div>
             </button>
+            </SwipeRow>
           ))}
-          {!shownRows.length && !term && <div className="empty">Пока пусто. Откройте раздел «Люди» и выберите собеседника.</div>}
+          {db && !shownRows.length && !term && <div className="empty">Пока пусто. Откройте раздел «Люди» и выберите собеседника.</div>}
           {!shownRows.length && term && <div className="empty">Среди ваших собеседников такого нет.</div>}
           {term && <button className="ghost more" onClick={() => onFindPeople(term)}>Искать «{term}» среди всех людей</button>}
         </div>
@@ -210,6 +276,19 @@ export function ChatsPage({ onFindPeople }: { onFindPeople: (q: string) => void 
         {active ? <ChatView key={active.id} dialog={active} onClose={() => setActiveId(null)} />
           : <div className="blank"><div><h2>Выберите диалог</h2><p>Или найдите собеседника в разделе «Люди».</p></div></div>}
       </section>
+      {delRow && (
+        <ConfirmModal title={delRow.kind === 'group' ? (delRow.myRole === 'owner' ? 'Удалить беседу?' : 'Выйти из беседы?') : 'Удалить диалог?'}
+          confirmLabel={delRow.kind === 'group' ? (delRow.myRole === 'owner' ? 'Удалить беседу' : 'Выйти') : 'Удалить диалог'}
+          onCancel={() => setDelRow(null)}
+          onConfirm={() => {
+            const d = delRow; setDelRow(null);
+            removeDialog(d.id).then(() => { if (activeId === d.id) setActiveId(null); toast(d.kind === 'group' ? 'Готово' : 'Диалог удалён у обоих участников'); }).catch((e) => toast(e.message));
+          }}>
+          {delRow.kind === 'group'
+            ? (delRow.myRole === 'owner' ? `Беседа «${delRow.peer.displayName}» и вся переписка будут удалены у всех участников. Это нельзя отменить.` : `Вы выйдете из беседы «${delRow.peer.displayName}» и перестанете получать сообщения.`)
+            : `Вся переписка с ${delRow.peer.displayName} будет удалена у обоих участников. Это нельзя отменить.`}
+        </ConfirmModal>
+      )}
       {newGroup && <NewGroupModal onClose={() => setNewGroup(false)} onCreated={(id) => { setNewGroup(false); setActiveId(id); }} />}
     </div>
   );
@@ -391,6 +470,15 @@ function ChatView({ dialog, onClose }: { dialog: DialogDoc; onClose: () => void 
     setReplying(null); stick.current = true;
   };
   useEffect(() => { if (voice.seconds >= 300) void sendVoice(); }, [voice.seconds]);   // запись не длиннее 5 минут
+  const [emo, setEmo] = useState<DOMRect | null>(null);
+  const insertEmoji = (em: string) => {
+    const el = ta.current;
+    if (!el) return;
+    const a = el.selectionStart ?? el.value.length, b = el.selectionEnd ?? a;
+    el.setRangeText(em, a, b, 'end');
+    el.dispatchEvent(new Event('input', { bubbles: true }));   // обновит hasText и высоту поля через onChange
+    el.focus();
+  };
   const delDialogNow = () => {
     setDelDialog(false);
     removeDialog(dialog.id).then(() => { onClose(); toast('Диалог удалён у обоих участников'); }).catch((e) => toast(e.message));
@@ -589,7 +677,7 @@ function ChatView({ dialog, onClose }: { dialog: DialogDoc; onClose: () => void 
       <div className="msgs" ref={box} onScroll={onScroll}>
         {items.length ? items : <div className="empty" style={{ margin: 'auto' }}>Напишите первое сообщение.</div>}
         {isTyping && <div className="typing" aria-label="печатает"><i /><i /><i /></div>}
-        {showDown && <button className="down" aria-label="К последним сообщениям" onClick={() => box.current?.scrollTo({ top: box.current.scrollHeight, behavior: 'smooth' })}>↓</button>}
+        {showDown && <button className="down" aria-label="К последним сообщениям" onClick={() => box.current?.scrollTo({ top: box.current.scrollHeight, behavior: 'smooth' })}>↓{dialog.unread > 0 && <b className="badge dbadge">{dialog.unread}</b>}</button>}
       </div>
       {editing && (
         <div className="editbar">
@@ -631,6 +719,9 @@ function ChatView({ dialog, onClose }: { dialog: DialogDoc; onClose: () => void 
                 if (last) { e.preventDefault(); startEdit(last); }
               }
             }} />
+          <button className="icbtn emobtn" aria-label="Эмодзи" title="Эмодзи" onClick={(e) => setEmo(emo ? null : e.currentTarget.getBoundingClientRect())}>
+            <svg className="ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9" /><path d="M8.5 14.5c1 1.2 2.2 1.8 3.5 1.8s2.5-.6 3.5-1.8M9 9.5v.01M15 9.5v.01" /></svg>
+          </button>
           {hasText || editing || !canRecord()
             ? (
               <button className="send" onClick={submit} aria-label={editing ? 'Сохранить' : 'Отправить'} title={editing ? 'Сохранить' : 'Отправить'}>
@@ -642,6 +733,7 @@ function ChatView({ dialog, onClose }: { dialog: DialogDoc; onClose: () => void 
             : <button className="send" onClick={() => void startVoice()} aria-label="Записать голосовое" title="Голосовое сообщение"><Mic /></button>}
         </div>
       </div>
+      {emo && <EmojiPop anchor={emo} onPick={insertEmoji} onClose={() => setEmo(null)} />}
       {menu && <ContextMenu x={menu.x} y={menu.y} items={menuItems(menu)} picker={menu.m.id && menu.m.status === 'sent' ? { current: reactions[menu.m.id]?.[me], onPick: (e) => react(menu.m, e).catch((er: Error) => toast(er.message)) } : undefined} onClose={() => setMenu(null)} />}
       {fwd && <ForwardModal msg={fwd} onClose={() => setFwd(null)} onDone={() => setFwd(null)} />}
       {profile && <PeerProfile peer={dialog.peer} online={peerOnline} onClose={() => setProfile(false)} />}
