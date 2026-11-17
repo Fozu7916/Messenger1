@@ -2,6 +2,7 @@ import { useState, type FormEvent, type ReactNode } from 'react';
 import { useAuth } from '../lib/auth';
 import * as api from '../lib/api';
 import { ForgotPassword, checkPassword } from './LinkPages';
+import { AuthArt } from './AuthArt';
 
 const POINTS = [
   'Сообщения приходят мгновенно',
@@ -146,6 +147,7 @@ export function AuthPage() {
 
       <div className="hero">
         <div>
+          <AuthArt />
           <h1>Безопасность превыше всего</h1>
           <ul>
             {POINTS.map((t) => (
@@ -184,9 +186,9 @@ export function AuthPage() {
               <input className="field" name="password" type="password" maxLength={72} placeholder="Пароль" autoComplete={reg ? 'new-password' : 'current-password'} value={v.password} onChange={set('password')} onBlur={blur('password')} aria-invalid={!!show('password')} />,
               reg ? PASS_HINT : undefined)}
             {reg && <input className="field" name="displayName" placeholder="Имя (необязательно)" autoComplete="nickname" maxLength={64} value={v.name} onChange={set('name')} />}
-            {!reg && <button type="button" className="ghost" onClick={() => setForgot(true)}>Забыли пароль?</button>}
+            {!reg && <button type="button" className="linkbtn" onClick={() => setForgot(true)}>Забыли пароль?</button>}
             {err && <div className="err" role="alert">{err}</div>}
-            {needConfirm && !resent && v.id.includes('@') && <button type="button" className="ghost" onClick={resend}>Отправить письмо ещё раз</button>}
+            {needConfirm && !resent && v.id.includes('@') && <button type="button" className="linkbtn" onClick={resend}>Отправить письмо ещё раз</button>}
             {resent && <p className="hint">Если почта не подтверждена, письмо отправлено заново.</p>}
             <button className="btn big" disabled={busy}>{busy ? 'Подождите…' : reg ? 'Зарегистрироваться' : 'Войти'}</button>
           </div>

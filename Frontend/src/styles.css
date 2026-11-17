@@ -90,6 +90,26 @@ button{cursor:pointer}
 .preview .msg{touch-action:pan-y;max-width:86%;animation:none}
 .preview .msg.in{justify-self:start;background:#26231e;border-color:#35312a;color:#f0ebe0}
 .preview .msg.out{justify-self:end;background:#46261b;color:#f0ebe0}
+/* Иллюстрация левой панели входа */
+.hero>div:first-child{position:relative;overflow:hidden}
+.hero>div:first-child>*:not(.art){position:relative;z-index:1}
+.art{position:absolute;right:clamp(8px,3vw,48px);top:50%;width:min(42%,420px);height:auto;transform:translateY(-50%);pointer-events:none;z-index:0}
+.art .ring{fill:none;stroke:var(--accent);stroke-width:1.5}
+.art .r1{opacity:.14;stroke-dasharray:3 9}.art .r2{opacity:.2}.art .r3{opacity:.3}
+.art .shield{fill:color-mix(in srgb,var(--accent) 14%,transparent);stroke:var(--accent);stroke-width:2.5;stroke-linejoin:round}
+.art .lock{fill:var(--accent)}.art .shackle{fill:none;stroke:var(--accent);stroke-width:9;stroke-linecap:round}
+.art .hole{fill:var(--panel-ink)}
+.art .bin{fill:#26231e;stroke:#35312a}.art .bout{fill:#46261b}
+.art .line{fill:#f0ebe0;opacity:.5}.art .line.short{opacity:.3}
+.art .badge{fill:var(--panel-ink);stroke:var(--accent);stroke-width:2}
+.art .tick{fill:none;stroke:var(--accent);stroke-width:4;stroke-linecap:round;stroke-linejoin:round}
+.art .dot{fill:var(--accent);opacity:.7}
+.art .float1{animation:artfloat 7s ease-in-out infinite}.art .float2{animation:artfloat 9s ease-in-out -3s infinite}
+@keyframes artfloat{0%,100%{transform:translateY(0)}50%{transform:translateY(-8px)}}
+@media(prefers-reduced-motion:reduce){.art .float1,.art .float2{animation:none}}
+@media(max-width:1180px){.art{display:none}}
+.linkbtn{justify-self:start;background:none;border:0;padding:0;color:var(--ink3);font-size:14px;text-decoration:underline;text-underline-offset:3px;cursor:pointer}
+.linkbtn:hover{color:var(--accent)}
 .card{align-self:center;justify-self:center;width:100%;max-width:460px;padding:56px 36px}
 .card h2{font:600 30px/1.2 var(--serif);margin:0 0 6px}
 .tabs{display:flex;gap:28px;margin-bottom:30px;border-bottom:1px solid var(--line)}

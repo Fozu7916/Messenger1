@@ -106,7 +106,17 @@ export const searchUsers = (q: string, p: { scope?: 'all' | 'contacts'; offset?:
   if (p.limit) s.set('limit', String(p.limit));
   return req<User[]>('GET', `/api/users/search?${s}`);
 };
-export const dialogs = () => req<DialogDto[]>('GET', '/api/dialogs');
+// Сервер отдаёт диалоги порциями (до 200 за запрос); для остального кода собираем полный список.
+export const dialogs = async (): Promise<DialogDto[]> => {
+  const PAGE = 100;
+  const all: DialogDto[] = [];
+  for (let offset = 0; offset < 5000; offset += PAGE) {
+    const page = await req<DialogDto[]>('GET', `/api/dialogs?limit=${PAGE}&offset=${offset}`);
+    all.push(...page);
+    if (page.length < PAGE) break;
+  }
+  return all;
+};
 export const createDialog = (userId: string) => req<DialogDto>('POST', '/api/dialogs', { userId });
 export const deleteDialog = (id: string) => req<void>('DELETE', `/api/dialogs/${id}`);
 // scope: 'me' — скрыть только у себя, 'all' — удалить у обоих участников (как в Telegram)

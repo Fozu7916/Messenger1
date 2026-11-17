@@ -19,12 +19,18 @@ public sealed class DialogsController(AppDbContext db, IMessageRepository messag
     IHubContext<ChatHub> hub, ILogger<DialogsController> log) : ControllerBase
 {
     [HttpGet]
-    public async Task<ActionResult<List<DialogDto>>> List(CancellationToken ct)
+    public async Task<ActionResult<List<DialogDto>>> List([FromQuery] int limit = 100, [FromQuery] int offset = 0, CancellationToken ct = default)
     {
         var me = User.GetUserId();
+        // Ответ ограничен: за один запрос нельзя выгрузить все диалоги. Порядок — по последней активности, как в интерфейсе.
+        limit = Math.Clamp(limit, 1, 200);
+        offset = Math.Max(0, offset);
 
         var rows = await db.Dialogs.AsNoTracking()
             .Where(d => d.Members.Any(m => m.UserId == me))
+            .OrderByDescending(d => d.Messages.Where(m => m.DeletedAt == null).Max(m => (DateTime?)m.CreatedAt) ?? d.CreatedAt)
+            .ThenBy(d => d.Id)
+            .Skip(offset).Take(limit)
             .Select(d => new
             {
                 d.Id,

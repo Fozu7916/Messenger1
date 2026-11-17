@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import * as api from '../lib/api';
+import { AuthArt } from './AuthArt';
 
 /** Те же правила, что на сервере: 8–72 символа, буква и цифра. */
 export const checkPassword = (v: string) =>
@@ -16,8 +17,12 @@ const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 function Frame({ children }: { children: ReactNode }) {
   return (
     <div className="auth">
+      <div className="banner">Личная переписка без установки приложений</div>
       <div className="hero">
-        <div />
+        <div>
+          <AuthArt />
+          <h1>Безопасность превыше всего</h1>
+        </div>
         <div className="card">{children}</div>
       </div>
     </div>
@@ -60,7 +65,7 @@ export function ForgotPassword({ onBack }: { onBack: () => void }) {
           <input className="field" type="email" inputMode="email" autoComplete="email" placeholder="Email" value={email} onChange={(e) => { setEmail(e.target.value); setErr(''); }} />
           {err && <div className="err" role="alert">{err}</div>}
           <button className="btn big" disabled={busy}>{busy ? 'Подождите…' : 'Отправить ссылку'}</button>
-          <button type="button" className="ghost" onClick={onBack}>Назад</button>
+          <button type="button" className="linkbtn" onClick={onBack}>Назад</button>
         </form>
       )}
     </Frame>
