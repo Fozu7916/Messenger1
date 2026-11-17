@@ -471,3 +471,31 @@ button{touch-action:manipulation;-webkit-tap-highlight-color:transparent}
 .dbadge{position:absolute;top:-8px;right:-4px}
 .msgs .empty{margin:auto;padding:10px 20px;border-radius:9999px;background:var(--surface);border:1px solid var(--line);color:var(--ink2);font-size:14px;box-shadow:var(--shadow)}
 .field.search:focus{box-shadow:0 0 0 3px var(--accent-soft)}
+
+/* ---- чат: читаемость поверх обоев, исходящие, реакции ---- */
+.msg{font-weight:400}
+.msg.out{background:color-mix(in srgb,var(--accent) 26%,var(--surface));border-color:color-mix(in srgb,var(--accent) 38%,transparent)}
+/* картинка-обои: пузырям добавляем матовую подложку, чтобы текст не тонул в рисунке */
+[data-wall=upload] .msg{-webkit-backdrop-filter:blur(12px) saturate(1.15);backdrop-filter:blur(12px) saturate(1.15)}
+[data-wall=upload] .msg.in{background:color-mix(in srgb,var(--surface) 90%,transparent)}
+/* разделитель даты: просто «таблетка» по центру, без линий через картинку */
+.day{justify-content:center}
+.day::before,.day::after{display:none}
+.day span{-webkit-backdrop-filter:blur(8px);backdrop-filter:blur(8px);background:color-mix(in srgb,var(--surface) 84%,transparent)}
+
+/* реакции под сообщением */
+.rx{gap:6px;margin-top:8px}
+.rx button{display:inline-flex;align-items:center;gap:5px;height:26px;padding:0 9px 0 7px;border-radius:9999px;border:1px solid transparent;background:color-mix(in srgb,var(--ink) 9%,transparent);color:var(--ink2);font:600 12px/1 var(--mono);cursor:pointer;transition:transform .12s,background .15s,border-color .15s}
+.rx button .e{font-size:15px;line-height:1;font-family:'Apple Color Emoji','Segoe UI Emoji','Noto Color Emoji',sans-serif}
+.rx button:hover{transform:translateY(-1px);background:color-mix(in srgb,var(--ink) 15%,transparent)}
+.rx button:active{transform:scale(.94)}
+.rx button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.rx button.mine{background:color-mix(in srgb,var(--accent) 22%,transparent);border-color:color-mix(in srgb,var(--accent) 55%,transparent);color:var(--ink)}
+.rx button.mine .n{color:var(--accent)}
+/* панель быстрых реакций при наведении и выбор реакции в контекстном меню */
+.qr{top:-42px;padding:4px 6px;gap:2px;background:color-mix(in srgb,var(--surface) 92%,transparent);-webkit-backdrop-filter:blur(10px);backdrop-filter:blur(10px)}
+.qr button{font-size:20px;padding:4px 6px}
+.qr button:hover{transform:translateY(-2px) scale(1.2)}
+.ctx .rpick{gap:4px;padding:4px 4px 10px}
+.ctx .rpick button{font-size:22px;padding:6px 8px;transition:transform .1s,background .12s}
+.ctx .rpick button:hover{background:var(--surface2);transform:scale(1.14)}

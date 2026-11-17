@@ -609,7 +609,7 @@ function ChatView({ dialog, onClose }: { dialog: DialogDoc; onClose: () => void 
             <div className="rx">
               {Object.entries(Object.values(reactions[m.id]).reduce<Record<string, number>>((a, e) => ({ ...a, [e]: (a[e] ?? 0) + 1 }), {})).map(([e, n]) => (
                 <button key={e + n} className={reactions[m.id][me] === e ? 'mine' : ''} aria-pressed={reactions[m.id][me] === e}
-                  onClick={() => toggleReact(m, e)}>{e} {n}</button>
+                  onClick={() => toggleReact(m, e)}><span className="e">{e}</span>{n > 1 && <span className="n">{n}</span>}</button>
               ))}
             </div>
           )}

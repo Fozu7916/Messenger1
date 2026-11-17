@@ -143,6 +143,7 @@ export function applyTheme() {
   const [color, ink] = accentColors(dark);
   const root = document.documentElement;
   root.dataset.theme = dark ? 'dark' : 'light';
+  root.dataset.wall = state.wallpaper.kind;   // для CSS: поверх загруженной картинки пузырям нужна подложка
   const set = (k: string, v: string) => root.style.setProperty(k, v);
   set('--accent', color); set('--accent-ink', ink);
   set('--br', RADII[state.bubble]); set('--msg-py', PADS[state.density]);
