@@ -4,6 +4,7 @@ import { ChatProvider, useChat, useLiveQuery } from './lib/chat';
 import { usePersisted } from './lib/persist';
 import { loadRemoteAppearance } from './lib/theme';
 import { AuthPage } from './components/AuthPage';
+import { LinkPage } from './components/LinkPages';
 import { ChatsPage } from './components/ChatsPage';
 import { PeoplePage } from './components/PeoplePage';
 import { SettingsPage } from './components/SettingsPage';
@@ -12,6 +13,8 @@ import type { DialogDoc } from './types';
 
 export default function App() {
   const { session } = useAuth();
+  // Ссылки из писем (сброс пароля, подтверждение почты) работают и для вошедшего пользователя.
+  if (location.pathname === '/reset' || location.pathname === '/confirm') return <LinkPage kind={location.pathname === '/reset' ? 'reset' : 'confirm'} />;
   return session ? <ChatProvider><Shell /></ChatProvider> : <AuthPage />;
 }
 

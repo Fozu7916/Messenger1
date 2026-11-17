@@ -11,6 +11,7 @@
 ## Возможности MVP
 
 - Регистрация, авторизация и выход из аккаунта
+- Восстановление пароля и подтверждение почты по ссылке из письма
 - Управление профилем
 - Поиск пользователей
 - Личные диалоги и список диалогов
@@ -25,7 +26,7 @@
 |------|------|
 | Frontend | React, TypeScript, RxDB (IndexedDB) |
 | Backend | C# .NET 10, SignalR (WSS), REST API, EF Core + Dapper |
-| Данные | PostgreSQL (ULID), Redis (backplane, presence), S3 |
+| Данные | PostgreSQL (ULID), S3 |
 
 ## Структура репозитория
 
@@ -36,7 +37,7 @@ Messenger1/
 │   ├── src/Messenger.Api/       # REST API + SignalR Hub
 │   └── tests/Messenger.Tests/   # тесты бэкенда
 ├── frontend/                    # React + TS, тесты фронтенда
-├── docker-compose.yml           # PostgreSQL, Redis, MinIO для разработки
+├── docker-compose.yml           # PostgreSQL, MinIO для разработки
 ├── .env.example
 ├── DOCUMENTATION.md             # документация
 └── README.md
@@ -48,7 +49,7 @@ Messenger1/
 
 - .NET SDK 10
 - Node.js 20+ и npm
-- Docker (PostgreSQL, Redis, S3-совместимое хранилище MinIO)
+- Docker (PostgreSQL, S3-совместимое хранилище MinIO)
 
 ### Запуск инфраструктуры
 
@@ -94,9 +95,18 @@ cd frontend && npm test
 | Переменная | Назначение |
 |------------|------------|
 | `ConnectionStrings__Postgres` | Строка подключения к PostgreSQL |
-| `ConnectionStrings__Redis` | Redis для backplane (необязательно) |
 | `Jwt__Key` | Секрет подписи JWT, не короче 32 символов |
-| `Cors__Origins__0` | Разрешённый origin фронтенда |
+| `Cors__Origins__0` | Разрешённый origin фронтенда (прод: `https://messenger1-g19r.onrender.com`) |
+| `App__PublicBaseUrl` | Адрес сайта для ссылок в письмах (прод: `https://messenger1-g19r.onrender.com`) |
+| `Resend__ApiKey`, `Resend__From` | Отправка писем через Resend (HTTPS). `From` — адрес на подтверждённом домене, например `no-reply@fozu-dev.site` |
+| `Smtp__Host`, `Smtp__Port`, `Smtp__User`, `Smtp__Password`, `Smtp__From` | Альтернатива: свой SMTP (порт 587). На бесплатном Render SMTP-порты закрыты |
+| `Auth__RequireConfirmedEmail` | `true` — вход только с подтверждённой почтой (по умолчанию `false`) |
+
+Если не задан ни `Resend__ApiKey`, ни `Smtp__Host`, в Development письма пишутся в лог, в Production не отправляются.
+
+### Продакшен (Render)
+
+Сайт: [https://messenger1-g19r.onrender.com](https://messenger1-g19r.onrender.com). Переменные задаются в разделе Environment сервиса на Render, не в репозитории. Письма уходят через Resend с домена `fozu-dev.site`; подробности и порядок настройки — в [DOCUMENTATION.md](DOCUMENTATION.md), раздел «Письма в продакшене».
 
 ## Документация
 

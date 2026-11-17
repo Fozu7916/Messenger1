@@ -2,6 +2,7 @@ using System.Net;
 using System.Threading.RateLimiting;
 using Messenger.Api.Auth;
 using Messenger.Api.Data;
+using Messenger.Api.Email;
 using Messenger.Api.Hubs;
 using Messenger.Api.Messages;
 using Messenger.Api.Storage;
@@ -39,6 +40,15 @@ builder.Services.AddFileStorage(config);   // S3: Yandex Object Storage (про�
 builder.Services.AddSingleton<ITokenService, TokenService>();
 builder.Services.AddScoped<IRefreshTokenService, RefreshTokenService>();
 builder.Services.AddSingleton<LoginThrottle>();
+builder.Services.AddScoped<IEmailTokenService, EmailTokenService>();
+builder.Services.Configure<SmtpOptions>(config.GetSection("Smtp"));
+builder.Services.Configure<ResendOptions>(config.GetSection("Resend"));
+if (!string.IsNullOrWhiteSpace(config["Resend:ApiKey"]))
+    builder.Services.AddHttpClient<IEmailSender, ResendEmailSender>();   // HTTPS: работает и на бесплатном Render
+else if (!string.IsNullOrWhiteSpace(config["Smtp:Host"]))
+    builder.Services.AddSingleton<IEmailSender, SmtpEmailSender>();
+else
+    builder.Services.AddSingleton<IEmailSender, LogEmailSender>();
 builder.Services.AddHostedService<RefreshTokenCleanup>();
 builder.Services.AddSingleton<HubRateLimiter>();
 builder.Services.AddSingleton<IUserIdProvider, SubClaimUserIdProvider>();
@@ -90,16 +100,30 @@ builder.Services.Configure<ForwardedHeadersOptions>(o =>
 
 // ---------- Rate limiting на авторизацию ----------
 var authPerMinute = config.GetValue("RateLimiting:AuthPerMinute", 10);
-var usersPerMinute = config.GetValue("RateLimiting:UsersPerMinute", 60);
+var usersPerMinute = config.GetValue("RateLimiting:UsersPerMinute", 300);
+var mailPer15Min = config.GetValue("RateLimiting:MailPer15Min", 5);
 builder.Services.AddRateLimiter(o =>
 {
     o.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
-    o.AddPolicy("users", ctx => RateLimitPartition.GetFixedWindowLimiter(
+    // Клиенту сообщаем, через сколько повторить (фронтенд показывает это число).
+    o.OnRejected = (ctx, _) =>
+    {
+        if (ctx.Lease.TryGetMetadata(MetadataName.RetryAfter, out var after))
+            ctx.HttpContext.Response.Headers.RetryAfter = ((int)Math.Ceiling(after.TotalSeconds)).ToString();
+        return ValueTask.CompletedTask;
+    };
+    // REST по пользователю: скользящее окно сглаживает всплески (синхронизация после реконнекта) лучше фиксированного.
+    o.AddPolicy("users", ctx => RateLimitPartition.GetSlidingWindowLimiter(
         ctx.User.FindFirst("sub")?.Value ?? ctx.Connection.RemoteIpAddress?.ToString() ?? "unknown",
-        _ => new FixedWindowRateLimiterOptions { PermitLimit = usersPerMinute, Window = TimeSpan.FromMinutes(1) }));
+        _ => new SlidingWindowRateLimiterOptions { PermitLimit = usersPerMinute, Window = TimeSpan.FromMinutes(1), SegmentsPerWindow = 6 }));
+    // Вход, регистрация, обновление сессии, сброс пароля: по IP.
     o.AddPolicy("auth", ctx => RateLimitPartition.GetFixedWindowLimiter(
         ctx.Connection.RemoteIpAddress?.ToString() ?? "unknown",
         _ => new FixedWindowRateLimiterOptions { PermitLimit = authPerMinute, Window = TimeSpan.FromMinutes(1) }));
+    // Всё, что отправляет письма: заметно строже, партиция отдельная от "auth".
+    o.AddPolicy("mail", ctx => RateLimitPartition.GetFixedWindowLimiter(
+        "mail:" + (ctx.Connection.RemoteIpAddress?.ToString() ?? "unknown"),
+        _ => new FixedWindowRateLimiterOptions { PermitLimit = mailPer15Min, Window = TimeSpan.FromMinutes(15) }));
 });
 
 // ---------- SignalR (+ Redis backplane, если задан) ----------

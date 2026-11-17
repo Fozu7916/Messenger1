@@ -37,7 +37,7 @@ export function refresh(): Promise<AuthResponse | null> {
 
 const FALLBACK: Record<number, string> = {
   400: 'Проверьте введённые данные', 413: 'Файл слишком большой', 401: 'Неверные данные или истёкшая сессия',
-  404: 'Не найдено', 409: 'Такой логин или email уже занят', 429: 'Слишком много запросов — подождите минуту',
+  403: 'Подтвердите email — письмо со ссылкой отправлено при регистрации', 404: 'Не найдено', 409: 'Такой логин или email уже занят', 429: 'Слишком много запросов — подождите минуту',
 };
 
 // application/problem+json (RFC 7807): берём первую ошибку валидации, иначе detail/title.
@@ -67,6 +67,10 @@ async function req<T>(method: string, path: string, body?: unknown, retried = fa
       if (r) return req<T>(method, path, body, true);
       if (r === null) onUnauthorized();
     } else if (res.status === 401 && token && retried) onUnauthorized();
+    if (res.status === 429) {
+      const s = Number(res.headers.get('Retry-After'));
+      throw new ApiError(429, s > 0 ? `Слишком много запросов — повторите через ${s} с` : FALLBACK[429]);
+    }
     throw new ApiError(res.status, problemText(res.status, data));
   }
   return data as T;
@@ -76,6 +80,10 @@ export const register = (v: { login: string; email: string; password: string; di
   req<AuthResponse>('POST', '/api/auth/register', v);
 export const login = (login: string, password: string) => req<AuthResponse>('POST', '/api/auth/login', { login, password });
 export const logout = () => req<void>('POST', '/api/auth/logout');
+export const forgotPassword = (email: string) => req<void>('POST', '/api/auth/forgot-password', { email });
+export const resetPassword = (token: string, newPassword: string) => req<void>('POST', '/api/auth/reset-password', { token, newPassword });
+export const confirmEmail = (token: string) => req<void>('POST', '/api/auth/confirm-email', { token });
+export const resendConfirmation = (email: string) => req<void>('POST', '/api/auth/resend-confirmation', { email });
 // bio: не передавать — не менять; '' — очистить
 export const updateMe = (v: { displayName: string; avatarUrl: string | null; bio?: string }) => req<Profile>('PUT', '/api/users/me', v);
 export const me = () => req<Profile>('GET', '/api/users/me');

@@ -111,6 +111,58 @@ namespace Messenger.Api.Data.Migrations
                     b.ToTable("dialog_members", (string)null);
                 });
 
+            modelBuilder.Entity("Messenger.Api.Domain.EmailToken", b =>
+                {
+                    b.Property<string>("Id")
+                        .HasMaxLength(26)
+                        .HasColumnType("character varying(26)")
+                        .HasColumnName("id")
+                        .UseCollation("C");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<DateTime>("ExpiresAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("expires_at");
+
+                    b.Property<string>("Purpose")
+                        .IsRequired()
+                        .HasMaxLength(10)
+                        .HasColumnType("character varying(10)")
+                        .HasColumnName("purpose");
+
+                    b.Property<string>("TokenHash")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("token_hash");
+
+                    b.Property<DateTime?>("UsedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("used_at");
+
+                    b.Property<string>("UserId")
+                        .IsRequired()
+                        .HasMaxLength(26)
+                        .HasColumnType("character varying(26)")
+                        .HasColumnName("user_id")
+                        .UseCollation("C");
+
+                    b.HasKey("Id")
+                        .HasName("pk_email_tokens");
+
+                    b.HasIndex("TokenHash")
+                        .IsUnique()
+                        .HasDatabaseName("ix_email_tokens_token_hash");
+
+                    b.HasIndex("UserId", "Purpose")
+                        .HasDatabaseName("ix_email_tokens_user_id_purpose");
+
+                    b.ToTable("email_tokens", (string)null);
+                });
+
             modelBuilder.Entity("Messenger.Api.Domain.Message", b =>
                 {
                     b.Property<string>("Id")
@@ -417,6 +469,10 @@ namespace Messenger.Api.Data.Migrations
                         .HasColumnType("character varying(254)")
                         .HasColumnName("email");
 
+                    b.Property<DateTime?>("EmailConfirmedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("email_confirmed_at");
+
                     b.Property<DateTime?>("LastSeenAt")
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("last_seen_at");
@@ -466,6 +522,16 @@ namespace Messenger.Api.Data.Migrations
                     b.Navigation("Dialog");
 
                     b.Navigation("User");
+                });
+
+            modelBuilder.Entity("Messenger.Api.Domain.EmailToken", b =>
+                {
+                    b.HasOne("Messenger.Api.Domain.User", null)
+                        .WithMany()
+                        .HasForeignKey("UserId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired()
+                        .HasConstraintName("fk_email_tokens_users_user_id");
                 });
 
             modelBuilder.Entity("Messenger.Api.Domain.Message", b =>

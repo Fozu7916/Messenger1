@@ -11,7 +11,7 @@ public sealed class RegisterRequest
     public string Email { get; init; } = "";
 
     // bcrypt учитывает только первые 72 байта пароля
-    [Required, MinLength(8), MaxUtf8Bytes(72)]
+    [Required, MinLength(8), MaxUtf8Bytes(72), StrongPassword]
     public string Password { get; init; } = "";
 
     [MaxLength(64)]
@@ -44,7 +44,27 @@ public sealed class ChangePasswordRequest
 {
     [Required, MaxUtf8Bytes(72)]
     public string CurrentPassword { get; init; } = "";
-    [Required, MinLength(8), MaxUtf8Bytes(72)]
+    [Required, MinLength(8), MaxUtf8Bytes(72), StrongPassword]
+    public string NewPassword { get; init; } = "";
+}
+
+public sealed class EmailRequest
+{
+    [Required, MaxLength(254), RegularExpression(@"^[^@\s]+@[^@\s.]+(\.[^@\s.]+)*\.[A-Za-z]{2,}$", ErrorMessage = "Введите корректный email, например name@example.com")]
+    public string Email { get; init; } = "";
+}
+
+public sealed class TokenRequest
+{
+    [Required, StringLength(64, MinimumLength = 40)]
+    public string Token { get; init; } = "";
+}
+
+public sealed class ResetPasswordRequest
+{
+    [Required, StringLength(64, MinimumLength = 40)]
+    public string Token { get; init; } = "";
+    [Required, MinLength(8), MaxUtf8Bytes(72), StrongPassword]
     public string NewPassword { get; init; } = "";
 }
 
@@ -77,6 +97,12 @@ public sealed class EditMessageRequest
 public sealed class MaxUtf8BytesAttribute(int max) : ValidationAttribute($"Пароль не длиннее {max} байт (для кириллицы и эмодзи — короче по символам)")
 {
     public override bool IsValid(object? value) => value is not string s || System.Text.Encoding.UTF8.GetByteCount(s) <= max;
+}
+
+/// <summary>Минимальная сложность: хотя бы одна буква и одна цифра (длину проверяют MinLength/MaxUtf8Bytes).</summary>
+public sealed class StrongPasswordAttribute() : ValidationAttribute("Пароль должен содержать хотя бы одну букву и одну цифру")
+{
+    public override bool IsValid(object? value) => value is not string s || (s.Any(char.IsLetter) && s.Any(char.IsDigit));
 }
 
 public sealed class CreateGroupRequest

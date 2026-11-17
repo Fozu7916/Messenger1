@@ -5,6 +5,8 @@ public class User
     public string Id { get; set; } = Ulid.NewUlid().ToString();
     public string Login { get; set; } = "";          // хранится в нижнем регистре
     public string Email { get; set; } = "";          // хранится в нижнем регистре
+    /// <summary>Когда владелец подтвердил почту по ссылке из письма; null — не подтверждена.</summary>
+    public DateTime? EmailConfirmedAt { get; set; }
     public string PasswordHash { get; set; } = "";
     public string DisplayName { get; set; } = "";
     public string? AvatarUrl { get; set; }
@@ -79,6 +81,19 @@ public class MessageHide
     public string MessageId { get; set; } = "";
     public string UserId { get; set; } = "";
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+}
+
+/// <summary>Одноразовый токен из письма: подтверждение почты или сброс пароля. В БД только SHA-256 от значения.</summary>
+public class EmailToken
+{
+    public string Id { get; set; } = Ulid.NewUlid().ToString();
+    public string UserId { get; set; } = "";
+    /// <summary>"confirm" или "reset".</summary>
+    public string Purpose { get; set; } = "";
+    public string TokenHash { get; set; } = "";
+    public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+    public DateTime ExpiresAt { get; set; }
+    public DateTime? UsedAt { get; set; }
 }
 
 public class RefreshToken

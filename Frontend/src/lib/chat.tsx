@@ -176,7 +176,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     await d.dialogs.findOne(id).remove();
   };
 
-  const syncMessages = async (did: string) => {
+  const syncMessages = async (did: string, verify = true) => {
     const d = dbRef.current!;
     const local = plain<MessageDoc>(await d.messages.find({ selector: { dialogId: did, status: 'sent' } }).exec()).filter((m) => m.id);
     let last = local.map((m) => m.id).sort().pop();
@@ -187,6 +187,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       if (page.length < 100) break;
       last = page[page.length - 1].id;
     }
+    if (!verify) return;   // «хвост» нужен только открытому диалогу: иначе каждый sync стоит 2 запроса на диалог
     // правки и удаления в дельту не попадают — обновляем «хвост» истории и сверяем с ним локальные сообщения
     const tail = await api.messages(did, { limit: 100 });
     await upsertMessages(tail);
@@ -214,7 +215,12 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       kind: x.kind ?? 'direct', memberCount: x.memberCount ?? 2, myRole: x.myRole ?? 'member',
     })));
     for (const x of local) if (x.pending) void materialize(x.id).catch(() => {}); // досоздаём офлайн-диалоги
-    const res = await Promise.allSettled(list.map((x) => syncMessages(x.id)));
+    // Список диалогов уже содержит последнее сообщение: тянем историю только там, где сервер новее локальной копии.
+    const localLast = new Map<string, string>();
+    for (const m of plain<MessageDoc>(await d.messages.find({ selector: { status: 'sent' } }).exec()))
+      if (m.id && m.id > (localLast.get(m.dialogId) ?? '')) localLast.set(m.dialogId, m.id);
+    const stale = list.filter((x) => x.id === activeRef.current || (x.lastMessage?.id ?? '') > (localLast.get(x.id) ?? ''));
+    const res = await Promise.allSettled(stale.map((x) => syncMessages(x.id, x.id === activeRef.current)));
     res.forEach((r) => r.status === 'rejected' && console.error('syncMessages failed', r.reason));
   };
 
@@ -467,7 +473,10 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     },
     setActive: (id) => {
       activeRef.current = id;
-      if (id) { void clearUnread(id); void markRead(id); }
+      if (id) {
+        void clearUnread(id); void markRead(id);
+        if (!isTemp(id)) void syncMessages(id).catch(() => {});   // правки/удаления, пропущенные пока диалог не был открыт
+      }
     },
     send: (dialogId, text, replyToId) => {
       const m: MessageDoc = {

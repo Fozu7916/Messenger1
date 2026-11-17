@@ -1,5 +1,7 @@
 import { useState, type FormEvent, type ReactNode } from 'react';
 import { useAuth } from '../lib/auth';
+import * as api from '../lib/api';
+import { ForgotPassword, checkPassword } from './LinkPages';
 
 const POINTS = [
   'Сообщения приходят мгновенно',
@@ -8,7 +10,7 @@ const POINTS = [
 ];
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-const PASS_HINT = 'От 8 до 72 символов';
+const PASS_HINT = 'От 8 до 72 символов, буква и цифра';
 
 const checkEmail = (v: string) =>
   !v.trim()
@@ -24,18 +26,16 @@ const checkLogin = (v: string) =>
     ? ''
     : '3–32 символа: латиница, цифры, _';
 
-const checkPass = (v: string) =>
-  !v
-    ? 'Введите пароль'
-    : v.length < 8
-      ? `Пароль слишком короткий: ${v.length} из 8 символов`
-      : '';
+const checkPass = checkPassword;
 
 export function AuthPage() {
   const { login, register } = useAuth();
   const [mode, setMode] = useState<'login' | 'register'>('login');
   const [err, setErr] = useState('');
   const [busy, setBusy] = useState(false);
+  const [forgot, setForgot] = useState(false);
+  const [needConfirm, setNeedConfirm] = useState(false);
+  const [resent, setResent] = useState(false);
 
   const [v, setV] = useState({
     id: '',
@@ -106,10 +106,16 @@ export function AuthPage() {
         await login(v.id, v.password);
       }
     } catch (x) {
+      setNeedConfirm((x as api.ApiError).status === 403);
       setErr((x as Error).message);
     } finally {
       setBusy(false);
     }
+  };
+
+  const resend = async () => {
+    try { await api.resendConfirmation(v.id.trim()); setResent(true); setErr(''); }
+    catch (x) { setErr((x as Error).message); }
   };
 
   const field = (
@@ -129,6 +135,8 @@ export function AuthPage() {
       ) : null}
     </div>
   );
+
+  if (forgot) return <ForgotPassword onBack={() => setForgot(false)} />;
 
   return (
     <div className="auth">
@@ -176,7 +184,10 @@ export function AuthPage() {
               <input className="field" name="password" type="password" maxLength={72} placeholder="Пароль" autoComplete={reg ? 'new-password' : 'current-password'} value={v.password} onChange={set('password')} onBlur={blur('password')} aria-invalid={!!show('password')} />,
               reg ? PASS_HINT : undefined)}
             {reg && <input className="field" name="displayName" placeholder="Имя (необязательно)" autoComplete="nickname" maxLength={64} value={v.name} onChange={set('name')} />}
+            {!reg && <button type="button" className="ghost" onClick={() => setForgot(true)}>Забыли пароль?</button>}
             {err && <div className="err" role="alert">{err}</div>}
+            {needConfirm && !resent && v.id.includes('@') && <button type="button" className="ghost" onClick={resend}>Отправить письмо ещё раз</button>}
+            {resent && <p className="hint">Если почта не подтверждена, письмо отправлено заново.</p>}
             <button className="btn big" disabled={busy}>{busy ? 'Подождите…' : reg ? 'Зарегистрироваться' : 'Войти'}</button>
           </div>
         </form>

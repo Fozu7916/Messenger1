@@ -1,6 +1,7 @@
 using Messenger.Api.Auth;
 using Messenger.Api.Contracts;
 using Messenger.Api.Data;
+using Messenger.Api.Email;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.RateLimiting;
@@ -13,7 +14,8 @@ namespace Messenger.Api.Controllers;
 
 [ApiController, Route("api/auth")]
 public sealed class AuthController(
-    AppDbContext db, ITokenService tokens, IRefreshTokenService refreshTokens, LoginThrottle throttle, IOptions<JwtOptions> jwt) : ControllerBase
+    AppDbContext db, ITokenService tokens, IRefreshTokenService refreshTokens, LoginThrottle throttle, IOptions<JwtOptions> jwt,
+    IEmailTokenService emailTokens, IEmailSender mail, IConfiguration config, ILogger<AuthController> log) : ControllerBase
 {
     public const string CookieName = "rt";
     // Сравнение с «пустышкой», когда пользователь не найден, — чтобы время ответа не выдавало существование логина.
@@ -43,6 +45,7 @@ public sealed class AuthController(
             return Problem(statusCode: StatusCodes.Status409Conflict, title: "Login or email is already taken");
         }
 
+        await SendConfirmationAsync(user, ct);
         return Ok(await StartSessionAsync(user, ct));
     }
 
@@ -65,8 +68,85 @@ public sealed class AuthController(
             return Problem(statusCode: StatusCodes.Status401Unauthorized, title: "Invalid login or password");
         }
 
+        // Проверка после пароля: чужой человек не узнает, подтверждена ли почта у существующего аккаунта.
+        if (user.EmailConfirmedAt is null && config.GetValue("Auth:RequireConfirmedEmail", false))
+            return Problem(statusCode: StatusCodes.Status403Forbidden, title: "Email is not confirmed");
+
         throttle.Reset(ip, id);
         return Ok(await StartSessionAsync(user, ct));
+    }
+
+    /// <summary>Отправляет письмо со ссылкой сброса. Всегда 204 — не раскрывает, есть ли такой email.</summary>
+    [HttpPost("forgot-password"), AllowAnonymous, EnableRateLimiting("mail")]
+    public async Task<IActionResult> ForgotPassword(EmailRequest req, CancellationToken ct)
+    {
+        var email = req.Email.Trim().ToLowerInvariant();
+        var user = await db.Users.AsNoTracking().FirstOrDefaultAsync(u => u.Email == email, ct);
+        if (user is not null && await emailTokens.IssueAsync(user.Id, EmailTokenPurpose.Reset, ct) is { } raw)
+            SendMail(user.Email, "Сброс пароля",
+                $"Чтобы задать новый пароль, откройте ссылку (действует {config.GetValue("Auth:ResetTokenMinutes", 30)} мин):\n{Link("reset", raw)}\n\nЕсли вы не запрашивали сброс, просто проигнорируйте письмо.");
+        return NoContent();
+    }
+
+    /// <summary>Задаёт новый пароль по токену из письма. Токен одноразовый; все сессии отзываются.</summary>
+    [HttpPost("reset-password"), AllowAnonymous, EnableRateLimiting("auth")]
+    public async Task<IActionResult> ResetPassword(ResetPasswordRequest req, CancellationToken ct)
+    {
+        var user = await emailTokens.ConsumeAsync(req.Token, EmailTokenPurpose.Reset, ct);
+        if (user is null) return Problem(statusCode: StatusCodes.Status400BadRequest, title: "Reset link is invalid or expired");
+
+        user.PasswordHash = BCrypt.Net.BCrypt.HashPassword(req.NewPassword, workFactor: 11);
+        user.EmailConfirmedAt ??= DateTime.UtcNow;   // перешёл по ссылке из почты — владение подтверждено
+        await db.SaveChangesAsync(ct);
+        await refreshTokens.RevokeAllExceptAsync(user.Id, null, ct);
+        return NoContent();
+    }
+
+    [HttpPost("confirm-email"), AllowAnonymous, EnableRateLimiting("auth")]
+    public async Task<IActionResult> ConfirmEmail(TokenRequest req, CancellationToken ct)
+    {
+        var user = await emailTokens.ConsumeAsync(req.Token, EmailTokenPurpose.Confirm, ct);
+        if (user is null) return Problem(statusCode: StatusCodes.Status400BadRequest, title: "Confirmation link is invalid or expired");
+        user.EmailConfirmedAt ??= DateTime.UtcNow;
+        await db.SaveChangesAsync(ct);
+        return NoContent();
+    }
+
+    /// <summary>Повторная отправка письма подтверждения. Всегда 204.</summary>
+    [HttpPost("resend-confirmation"), AllowAnonymous, EnableRateLimiting("mail")]
+    public async Task<IActionResult> ResendConfirmation(EmailRequest req, CancellationToken ct)
+    {
+        var email = req.Email.Trim().ToLowerInvariant();
+        var user = await db.Users.AsNoTracking().FirstOrDefaultAsync(u => u.Email == email && u.EmailConfirmedAt == null, ct);
+        if (user is not null) await SendConfirmationAsync(user, ct);
+        return NoContent();
+    }
+
+    private async Task SendConfirmationAsync(UserEntity user, CancellationToken ct)
+    {
+        if (await emailTokens.IssueAsync(user.Id, EmailTokenPurpose.Confirm, ct) is { } raw)
+            SendMail(user.Email, "Подтвердите почту",
+                $"Здравствуйте! Чтобы подтвердить email, откройте ссылку (действует {config.GetValue("Auth:ConfirmTokenHours", 24)} ч):\n{Link("confirm", raw)}");
+    }
+
+    /// <summary>Ссылка строится из конфигурации, а не из заголовка Host (иначе его подмена отравила бы ссылку в письме). Токен — во фрагменте: он не попадает в логи серверов и Referer.</summary>
+    private string Link(string page, string raw)
+    {
+        var baseUrl = config["App:PublicBaseUrl"];
+        if (string.IsNullOrWhiteSpace(baseUrl)) baseUrl = config.GetSection("Cors:Origins").Get<string[]>()?.FirstOrDefault() ?? "";
+        return $"{baseUrl.TrimEnd('/')}/{page}#token={raw}";
+    }
+
+    /// <summary>Отправка в фоне: время ответа не зависит от SMTP (иначе по задержке видно, существует ли email), а сбой почты не ломает запрос.</summary>
+    private void SendMail(string to, string subject, string body)
+    {
+        var sender = mail;
+        var logger = log;
+        _ = Task.Run(async () =>
+        {
+            try { await sender.SendAsync(to, subject, body); }
+            catch (Exception ex) { logger.LogError(ex, "Не удалось отправить письмо «{Subject}»", subject); }
+        });
     }
 
     /// <summary>
