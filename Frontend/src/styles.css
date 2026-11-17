@@ -499,3 +499,9 @@ button{touch-action:manipulation;-webkit-tap-highlight-color:transparent}
 .ctx .rpick{gap:4px;padding:4px 4px 10px}
 .ctx .rpick button{font-size:22px;padding:6px 8px;transition:transform .1s,background .12s}
 .ctx .rpick button:hover{background:var(--surface2);transform:scale(1.14)}
+
+/* реакции стоят в одной строке со временем и почти не добавляют высоты */
+.rx{float:left;flex-wrap:nowrap;gap:4px;margin:1px 10px 0 0}
+.rx button{height:20px;padding:0 7px 0 5px;gap:4px;font-size:11px}
+.rx button .e{font-size:13px}
+.msg.mo .rx{margin-left:8px}

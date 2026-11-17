@@ -599,13 +599,7 @@ function ChatView({ dialog, onClose }: { dialog: DialogDoc; onClose: () => void 
           {m.kind === 'video' && m.media && <VideoBubble m={m} />}
           {m.kind === 'voice' && m.media && <VoicePlayer m={m} />}
           {m.text}
-          <span className="meta">
-            {fmtTime(m.createdAt)}
-            {m.editedAt > 0 && ' · изменено'}
-            {m.id && (pins[dialog.id] ?? []).includes(m.id) && ' · закреплено'}
-            {out && state}
-          </span>
-          {m.id && reactions[m.id] && (
+          {m.id && Object.keys(reactions[m.id] ?? {}).length > 0 && (
             <div className="rx">
               {Object.entries(Object.values(reactions[m.id]).reduce<Record<string, number>>((a, e) => ({ ...a, [e]: (a[e] ?? 0) + 1 }), {})).map(([e, n]) => (
                 <button key={e + n} className={reactions[m.id][me] === e ? 'mine' : ''} aria-pressed={reactions[m.id][me] === e}
@@ -613,6 +607,12 @@ function ChatView({ dialog, onClose }: { dialog: DialogDoc; onClose: () => void 
               ))}
             </div>
           )}
+          <span className="meta">
+            {fmtTime(m.createdAt)}
+            {m.editedAt > 0 && ' · изменено'}
+            {m.id && (pins[dialog.id] ?? []).includes(m.id) && ' · закреплено'}
+            {out && state}
+          </span>
           {out && m.status === 'failed' && <button className="retry" onClick={() => retry(m)}>Повторить</button>}
           <button className="x more" aria-label="Действия с сообщением" title="Действия"
             onClick={(e) => { const r = e.currentTarget.getBoundingClientRect(); setMenu({ x: r.left, y: r.bottom + 4, m, sel: '' }); }}><Dots /></button>
