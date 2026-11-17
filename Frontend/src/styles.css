@@ -505,3 +505,4 @@ button{touch-action:manipulation;-webkit-tap-highlight-color:transparent}
 .rx button{height:20px;padding:0 7px 0 5px;gap:4px;font-size:11px}
 .rx button .e{font-size:13px}
 .msg.mo .rx{margin-left:8px}
+.msg .txt{display:block}   /* текст отдельным блоком: плавающие реакции встают под него, в строку со временем */

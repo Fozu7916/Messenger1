@@ -598,7 +598,7 @@ function ChatView({ dialog, onClose }: { dialog: DialogDoc; onClose: () => void 
           {m.kind === 'image' && m.media && <ImageBubble m={m} onOpen={setLightbox} />}
           {m.kind === 'video' && m.media && <VideoBubble m={m} />}
           {m.kind === 'voice' && m.media && <VoicePlayer m={m} />}
-          {m.text}
+          {m.text && <span className="txt">{m.text}</span>}
           {m.id && Object.keys(reactions[m.id] ?? {}).length > 0 && (
             <div className="rx">
               {Object.entries(Object.values(reactions[m.id]).reduce<Record<string, number>>((a, e) => ({ ...a, [e]: (a[e] ?? 0) + 1 }), {})).map(([e, n]) => (
