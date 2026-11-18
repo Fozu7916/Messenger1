@@ -8,7 +8,20 @@ npm run dev     # http://localhost:5173, /api и /hubs проксируются 
 npm test                # юнит- и интеграционные тесты (Vitest, jsdom)
 npm run test:coverage   # то же + покрытие (в консоли и в coverage/index.html)
 npm run build
+npm run test:e2e        # E2E (Playwright), нужен PostgreSQL, см. ниже
 ```
+
+### E2E-тесты
+
+Браузер → Vite → бэкенд → PostgreSQL, всё поднимается автоматически (`playwright.config.ts`); сценарии лежат в `e2e/`.
+
+```bash
+docker compose -f ../Infrastructure/docker-compose.yml up -d   # только PostgreSQL
+npx playwright install chromium                                # один раз
+npm run test:e2e                                               # или test:e2e:ui — с интерфейсом отладки
+```
+
+Для тестов используется отдельная база `messenger_e2e` (создаётся сама); строку подключения можно задать переменной `E2E_PG`. Файловое хранилище в E2E не нужно: фото и голосовые в сценарии не входят.
 
 ## Как устроено
 
