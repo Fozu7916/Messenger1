@@ -20,7 +20,7 @@ jobs:
         with:
           dotnet-version: 10.0.x
       # Интеграционным тестам нужен Docker (Testcontainers) — на ubuntu-latest он уже есть
-      - run: dotnet test backend/Messenger.sln -c Release
+      - run: dotnet test backend/Messenger.sln -c Release --collect:"XPlat Code Coverage"
 
   frontend:
     name: Frontend (tsc, vitest, build)
@@ -36,7 +36,7 @@ jobs:
           cache: npm
           cache-dependency-path: Frontend/package-lock.json
       - run: npm ci
-      - run: npm test
+      - run: npm run test:coverage   # vitest + отчёт о покрытии
       - run: npm run build   # tsc --noEmit + vite build
 
   docker:

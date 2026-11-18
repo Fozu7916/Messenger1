@@ -7,7 +7,7 @@ using Amazon.S3.Util;
 
 namespace Messenger.Api.Storage;
 
-/// <summary>Реализация поверх любого S3-совместимого хранилища (Yandex Object Storage, MinIO, AWS S3, R2).</summary>
+/// <summary>Реализация поверх любого S3-совместимого хранилища (Yandex Object Storage, AWS S3, Cloudflare R2).</summary>
 public sealed class S3FileStorage : IFileStorage, IDisposable
 {
     private readonly StorageOptions _o;
@@ -60,54 +60,11 @@ public sealed class S3FileStorage : IFileStorage, IDisposable
     public Task CopyAsync(string sourceKey, string destinationKey, CancellationToken ct = default) =>
         _s3.CopyObjectAsync(_o.Bucket, sourceKey, _o.Bucket, destinationKey, ct);
 
-    public async Task<long?> SizeAsync(string key, CancellationToken ct = default)
-    {
-        try { return (await _s3.GetObjectMetadataAsync(_o.Bucket, key, ct)).ContentLength; }
-        catch (AmazonS3Exception e) when (e.StatusCode == HttpStatusCode.NotFound) { return null; }
-    }
-
-    public async Task<byte[]?> ReadStartAsync(string key, int count, CancellationToken ct = default)
-    {
-        try
-        {
-            using var r = await _s3.GetObjectAsync(new GetObjectRequest { BucketName = _o.Bucket, Key = key, ByteRange = new ByteRange(0, count - 1) }, ct);
-            var buf = new byte[count];
-            var n = 0;
-            while (n < count)
-            {
-                var read = await r.ResponseStream.ReadAsync(buf.AsMemory(n), ct);
-                if (read == 0) break;
-                n += read;
-            }
-            return buf[..n];
-        }
-        catch (AmazonS3Exception e) when (e.StatusCode == HttpStatusCode.NotFound) { return null; }
-    }
-
-    public string GetUploadUrl(string key, string contentType, TimeSpan ttl) => _s3.GetPreSignedURL(new GetPreSignedUrlRequest
-    {
-        BucketName = _o.Bucket,
-        Key = key,
-        Verb = HttpVerb.PUT,
-        ContentType = contentType,
-        Expires = DateTime.UtcNow.Add(ttl),
-        Protocol = _o.Endpoint.StartsWith("http://", StringComparison.OrdinalIgnoreCase) ? Protocol.HTTP : Protocol.HTTPS,
-    });
-
     public async Task<IReadOnlyList<string>> ListAsync(string prefix, int max, CancellationToken ct = default)
     {
         var r = await _s3.ListObjectsV2Async(new ListObjectsV2Request { BucketName = _o.Bucket, Prefix = prefix, MaxKeys = max }, ct);
         return (r.S3Objects ?? []).Select(o => o.Key).ToList();
     }
-
-    public string GetDownloadUrl(string key, TimeSpan ttl) => _s3.GetPreSignedURL(new GetPreSignedUrlRequest
-    {
-        BucketName = _o.Bucket,
-        Key = key,
-        Verb = HttpVerb.GET,
-        Expires = DateTime.UtcNow.Add(ttl),
-        Protocol = _o.Endpoint.StartsWith("http://", StringComparison.OrdinalIgnoreCase) ? Protocol.HTTP : Protocol.HTTPS,
-    });
 
     /// <summary>Проверка доступа к бакету при старте (и создание бакета, если EnsureBucket включён).</summary>
     public async Task EnsureReadyAsync(CancellationToken ct)

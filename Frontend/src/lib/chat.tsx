@@ -6,7 +6,6 @@ import { useAuth } from './auth';
 import { closeDb, openDb, type DB } from './db';
 import { beep, getNotifyPrefs, showDesktop } from './notify';
 import { useToast } from '../components/ui';
-import { uploadToStorage } from './media';
 import type { DialogDoc, DialogDto, Member, MessageDoc, MessageDto, User } from '../types';
 
 export type ConnStatus = 'connecting' | 'online' | 'offline';
@@ -21,7 +20,7 @@ interface Chat {
   members: Record<string, Member[]>;    // dialogId → участники беседы (подгружаются при открытии)
   loadMembers(dialogId: string): Promise<void>;
   createGroup(title: string, memberIds: string[]): Promise<string>;
-  sendMedia(dialogId: string, kind: 'image' | 'voice' | 'video', file: Blob, opts?: { text?: string; durationMs?: number; replyToId?: string; width?: number; height?: number; poster?: Blob | null }): void;
+  sendMedia(dialogId: string, kind: 'image' | 'voice', file: Blob, opts?: { text?: string; durationMs?: number; replyToId?: string; width?: number; height?: number }): void;
   presence: Record<string, boolean>;    // userId → онлайн
   lastSeen: Record<string, number>;     // userId → время последнего выхода (мс)
   renamed: Record<string, string>;      // временный id диалога → серверный id
@@ -63,7 +62,7 @@ const toLocal = (m: MessageDto): MessageDoc => ({
   kind: m.kind ?? 'text', media: m.mediaUrl ?? '', mw: m.mediaWidth ?? 0, mh: m.mediaHeight ?? 0, dur: m.mediaDurationMs ?? 0,
 });
 /** Текст для превью и уведомлений: у вложений без подписи — название вложения. */
-export const previewOf = (m: { text: string; kind?: string }) => m.text || (m.kind === 'image' ? 'Фото' : m.kind === 'video' ? 'Видео' : m.kind === 'voice' ? 'Голосовое сообщение' : '');
+export const previewOf = (m: { text: string; kind?: string }) => m.text || (m.kind === 'image' ? 'Фото' : m.kind === 'voice' ? 'Голосовое сообщение' : '');
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 /** Живой запрос к RxDB: компонент перерисовывается при любом изменении данных. */
@@ -98,7 +97,6 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   const [typingUser, setTypingUser] = useState<Record<string, string>>({});
   const [members, setMembers] = useState<Record<string, Member[]>>({});
   const membersRef = useRef(members); membersRef.current = members;
-  const extras = useRef(new Map<string, { poster: Blob | null }>());   // превью ещё не отправленных видео
   const blobs = useRef(new Map<string, Blob>());   // ещё не отправленные вложения (живут, пока открыта вкладка)
 
   const dbRef = useRef<DB | null>(null);
@@ -172,8 +170,9 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   // ---------- Синхронизация (REST) ----------
   const dropDialogLocal = async (id: string) => {
     const d = dbRef.current!;
-    await d.messages.find({ selector: { dialogId: id } }).remove();
-    await d.dialogs.findOne(id).remove();
+    // incrementalRemove: параллельная синхронизация могла только что изменить документ — обычный remove() падал бы с CONFLICT
+    await d.messages.find({ selector: { dialogId: id } }).incrementalRemove();
+    await d.dialogs.findOne(id).incrementalRemove();
   };
 
   const syncMessages = async (did: string, verify = true) => {
@@ -240,19 +239,6 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         if (!real) return;
         m = { ...m, dialogId: real };
       }
-      if (m.kind === 'video') {   // видео: ссылка от API → PUT прямо в хранилище → подтверждение (API видео не пропускает через себя)
-        const blob = blobs.current.get(cid);
-        if (!blob) { await (await d.messages.findOne(cid).exec())?.incrementalPatch({ status: 'failed' }); return; }
-        const intent = await api.videoUpload(m.dialogId, { contentType: blob.type || 'video/mp4', size: blob.size, durationMs: m.dur });
-        await uploadToStorage(intent.uploadUrl, blob, intent.contentType);
-        const sent = toLocal(await api.sendVideo(m.dialogId, {
-          clientMessageId: cid, fileId: intent.fileId, ext: intent.ext, text: m.text, durationMs: m.dur, width: m.mw, height: m.mh,
-          replyToId: m.replyToId || undefined, poster: extras.current.get(cid)?.poster,
-        }));
-        await (await d.messages.findOne(cid).exec())?.incrementalPatch({ id: sent.id, status: 'sent', media: sent.media, mw: sent.mw, mh: sent.mh, dur: sent.dur });
-        blobs.current.delete(cid); extras.current.delete(cid);
-        return;
-      }
       if (m.kind === 'image' || m.kind === 'voice') {   // вложения уходят по REST (multipart), а не через хаб
         const blob = blobs.current.get(cid);
         if (!blob) { await (await d.messages.findOne(cid).exec())?.incrementalPatch({ status: 'failed' }); return; }   // страницу перезагрузили до отправки
@@ -288,8 +274,10 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   };
 
   const runSync = async () => {
-    try { await syncDialogs(); setError(''); } catch (e) { report(e); }
-    try { await flushPending(); } catch (e) { report(e); }
+    if (!dbRef.current) return;   // провайдер уже размонтирован (выход из аккаунта) — синхронизировать нечего
+    try { await syncDialogs(); setError(''); } catch (e) { if (dbRef.current) report(e); }
+    if (!dbRef.current) return;
+    try { await flushPending(); } catch (e) { if (dbRef.current) report(e); }
     void refreshPresence();
     const a = activeRef.current;
     if (a) void loadPins(a).catch((e) => console.warn('pins refresh failed', e));
@@ -463,7 +451,6 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     sendMedia: (dialogId, kind, file, opts) => {
       const cid = newId();
       blobs.current.set(cid, file);
-      if (kind === 'video') extras.current.set(cid, { poster: opts?.poster ?? null });
       const m: MessageDoc = {
         clientMessageId: cid, id: '', dialogId, senderId: me.id, text: opts?.text ?? '', createdAt: Date.now(), status: 'pending',
         isDeleted: false, editedAt: 0, replyToId: opts?.replyToId ?? '', fwdFrom: '',

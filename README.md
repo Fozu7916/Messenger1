@@ -18,7 +18,8 @@
 - Отправка и получение текстовых сообщений в реальном времени
 - История переписки, удаление сообщений и диалогов
 - Offline-First: сообщения не теряются при пропадании сети
-- Загрузка медиафайлов напрямую в S3 (через Pre-signed URL)
+- Беседы, фото и голосовые сообщения (хранятся в S3-совместимом хранилище; на проде — Yandex Object Storage)
+- Ответы, пересылка, закреп, реакции, «прочитано», статус «в сети»
 
 ## Технологии
 
@@ -26,7 +27,7 @@
 |------|------|
 | Frontend | React, TypeScript, RxDB (IndexedDB) |
 | Backend | C# .NET 10, SignalR (WSS), REST API, EF Core + Dapper |
-| Данные | PostgreSQL (ULID), S3 |
+| Данные | PostgreSQL (ULID), S3-совместимое хранилище (прод) |
 
 ## Структура репозитория
 
@@ -36,9 +37,12 @@ Messenger1/
 │   ├── Messenger.sln
 │   ├── src/Messenger.Api/       # REST API + SignalR Hub
 │   └── tests/Messenger.Tests/   # тесты бэкенда
-├── frontend/                    # React + TS, тесты фронтенда
-├── docker-compose.yml           # PostgreSQL, MinIO для разработки
+├── Frontend/                    # React + TS, тесты фронтенда (Vitest)
+├── Infrastructure/
+│   └── docker-compose.yml       # PostgreSQL для разработки
+├── Dockerfile
 ├── .env.example
+├── API.md                       # контракт REST и SignalR
 ├── DOCUMENTATION.md             # документация
 └── README.md
 ```
@@ -49,13 +53,15 @@ Messenger1/
 
 - .NET SDK 10
 - Node.js 20+ и npm
-- Docker (PostgreSQL, S3-совместимое хранилище MinIO)
+- Docker (PostgreSQL)
 
 ### Запуск инфраструктуры
 
 ```bash
-docker compose up -d
+docker compose -f Infrastructure/docker-compose.yml up -d
 ```
+
+Поднимается только PostgreSQL. Файловое хранилище локально не запускается: без переменных `Storage__*` загрузка аватарок, обоев, фото и голосовых отвечает `503`, остальное работает.
 
 ### Backend
 
@@ -71,7 +77,7 @@ API слушает `http://localhost:5080`, Swagger — `http://localhost:5080/s
 ### Frontend
 
 ```bash
-cd frontend
+cd Frontend
 npm install
 npm run dev
 ```
@@ -83,12 +89,12 @@ npm run dev
 cd backend && dotnet test
 
 # frontend
-cd frontend && npm test
+cd Frontend && npm test
 ```
 
 ## Конфигурация
 
-Секреты (строка подключения к БД, ключи S3, JWT-секрет) хранятся в переменных окружения или `.env`, который **не коммитится** в репозиторий. Пример — в `.env.example`.
+Секреты (строка подключения к БД, ключи хранилища, JWT-секрет) хранятся в переменных окружения или `.env`, который **не коммитится** в репозиторий. Пример — в `.env.example`.
 
 Имена переменных в формате ASP.NET Core, `__` означает вложенность:
 
@@ -100,6 +106,7 @@ cd frontend && npm test
 | `App__PublicBaseUrl` | Адрес сайта для ссылок в письмах (прод: `https://messenger1-g19r.onrender.com`) |
 | `Resend__ApiKey`, `Resend__From` | Отправка писем через Resend (HTTPS). `From` — адрес на подтверждённом домене, например `no-reply@fozu-dev.site` |
 | `Smtp__Host`, `Smtp__Port`, `Smtp__User`, `Smtp__Password`, `Smtp__From` | Альтернатива: свой SMTP (порт 587). На бесплатном Render SMTP-порты закрыты |
+| `Storage__Endpoint`, `Storage__Region`, `Storage__Bucket`, `Storage__AccessKey`, `Storage__SecretKey` | Файловое хранилище (прод: Yandex Object Storage). Без них файловые функции отвечают 503 |
 | `Auth__RequireConfirmedEmail` | `true` — вход только с подтверждённой почтой (по умолчанию `false`) |
 
 Если не задан ни `Resend__ApiKey`, ни `Smtp__Host`, в Development письма пишутся в лог, в Production не отправляются.

@@ -26,7 +26,9 @@
 
 **Входит в проект:** клиентская и серверная части, проектирование БД, регистрация и авторизация, обмен сообщениями в реальном времени, хранение истории, базовая защита данных, тестирование, развёртывание.
 
-**Не входит в MVP:** групповые чаты, звонки, сквозное шифрование (E2EE), мобильные приложения.
+**Реализовано сверх базового MVP:** беседы (до 50 участников), фото и голосовые сообщения, ответы, пересылка, закреп, реакции, «прочитано», присутствие, восстановление пароля и подтверждение почты, оформление (темы, обои).
+
+**Не входит:** звонки, видеосообщения, сквозное шифрование (E2EE), мобильные приложения.
 
 ## 2. Требования
 
@@ -43,6 +45,9 @@
 9. Просмотр истории сообщений
 10. Список диалогов
 11. Удаление сообщения или диалога
+12. Беседы, фото и голосовые сообщения
+13. Ответы, пересылка, закреп, реакции
+14. Восстановление пароля и подтверждение почты
 
 ### Нефункциональные
 
@@ -83,11 +88,10 @@ flowchart LR
 
     React ==>|WSS Сообщения| SignalR
     React ==>|HTTP История/Медиа| REST
-    React -.->|Прямой PUT файла| S3
 
     SignalR ==>|INSERT Dapper| Postgres
     REST <-->|EF Core / Dapper| Postgres
-    REST -.->|Генерация Presigned URL| S3
+    REST <-->|Файлы: PUT/GET/DELETE| S3
 ```
 
 **WSS** — WebSocket Secure (WebSocket поверх TLS).
@@ -99,7 +103,7 @@ flowchart LR
 | Offline-First (RxDB) | Мгновенный отклик интерфейса, работа при нестабильной сети |
 | ULID вместо UUID/serial | Сортируемые по времени ключи — вставка в конец индекса, меньше фрагментации |
 | EF Core + Dapper (CQRS-подход) | EF — для редких операций, Dapper — для высокочастотной вставки сообщений |
-| Pre-signed URL для медиа | Файлы идут напрямую в S3, бэкенд не нагружается |
+| Файлы через API, а не напрямую в S3 | Сервер проверяет и перекодирует картинки (WebP, без метаданных), проверяет формат голосовых и права доступа; бакет остаётся закрытым |
 
 ## 4. Клиентский слой
 
@@ -108,7 +112,7 @@ flowchart LR
 - **Optimistic UI.** При отправке сообщение сразу записывается в локальную БД и отображается. Подтверждение от сервера обновляет его статус.
 - **Реальное время.** Постоянное WSS-соединение с SignalR Hub.
 - **Синхронизация после офлайна.** Клиент делает HTTP-запрос дельты, передавая `LastSyncULID` — ULID последнего известного сообщения. Сервер возвращает всё более новое.
-- **Медиа.** Клиент запрашивает у REST API короткоживущий Pre-signed URL и отправляет файл напрямую в S3 методом PUT.
+- **Медиа.** Фото и голосовые уходят в REST API (multipart), сервер сохраняет их в S3. Файлы приватны: клиент берёт их через `fetch` с токеном, кэширует в Cache Storage и показывает blob-ссылкой.
 - **Сохранение состояния** при обновлении страницы: токен сессии, открытый диалог и позиция прокрутки.
 
 ## 5. Слой маршрутизации и бизнес-логики
@@ -147,7 +151,19 @@ flowchart LR
 | DELETE | `/api/dialogs/{id}` | Удалить диалог целиком (у обоих участников) | `204` |
 | GET | `/api/dialogs/{id}/messages` | История и дельта (параметры ниже) | `200` `message[]` по возрастанию ULID |
 | DELETE | `/api/messages/{id}?scope=all\|me` | Удалить у обоих (мягкое удаление, снимает закреп) или скрыть только у себя | `204`; `404` |
-| POST | `/api/media/upload-url` | Получить Pre-signed URL | не реализовано |
+| POST | `/api/auth/forgot-password`, `/reset-password`, `/confirm-email`, `/resend-confirmation` | Восстановление пароля и подтверждение почты | `204` |
+| GET/PUT | `/api/users/me/appearance` | Оформление (JSON до 4 КБ) | `200` / `204` |
+| POST/DELETE | `/api/users/me/avatar` | Загрузить (multipart `file`, до 5 МБ) / удалить аватар | `200` `profile` |
+| GET/POST/DELETE | `/api/users/me/wallpapers[/{id}]` | Обои пользователя (до 12) | `200` / `201` / `204` |
+| GET | `/api/files/avatars/{userId}/{name}`, `/api/files/group-avatars/{dialogId}/{name}` | Публичная отдача аватарок | `image/webp` |
+| POST | `/api/dialogs/group` | Создать беседу `{title, memberIds}` | `201` `dialog` |
+| PUT | `/api/dialogs/{id}` | Переименовать беседу (владелец) | `204` |
+| GET/POST | `/api/dialogs/{id}/members` | Участники / добавить `{userIds}` (всего до 50) | `200` |
+| DELETE | `/api/dialogs/{id}/members/{userId}` | `me` — выйти; чужой — исключить (владелец) | `204` |
+| POST/DELETE | `/api/dialogs/{id}/avatar` | Аватар беседы | `204` |
+| GET/PUT/DELETE | `/api/dialogs/{id}/reactions[/{messageId}]` | Реакции (6 эмодзи, одна на пользователя) | `200` / `204` |
+| POST | `/api/dialogs/{id}/messages/media` | Фото или голосовое (multipart) | `200` `message` |
+| GET | `/api/dialogs/{id}/media/{name}` | Файл вложения (только участникам, по токену) | файл |
 
 Параметры истории сообщений:
 
@@ -165,8 +181,10 @@ flowchart LR
 user    { id, login, displayName, avatarUrl }
 profile { id, login, displayName, avatarUrl, bio, createdAt, isOnline?, lastSeenAt? }
 message { id, clientMessageId, dialogId, senderId, text, mediaUrl, createdAt, editedAt,
-          replyToId, forwardedFromId, forwardedFromName }
-dialog  { id, createdAt, peer: user, lastMessage: message | null, unreadCount, peerLastReadId }
+          replyToId, forwardedFromId, forwardedFromName,
+          kind (text | image | voice | system), mediaWidth, mediaHeight, mediaDurationMs }
+dialog  { id, createdAt, peer: user, lastMessage: message | null, unreadCount, peerLastReadId,
+          kind (direct | group), title, memberCount, myRole (owner | member) }
 ```
 
 ### SignalR Hub
@@ -184,9 +202,14 @@ dialog  { id, createdAt, peer: user, lastMessage: message | null, unreadCount, p
 | сервер → клиент | `MessagePinned(dialogId, message, pinnedById)` / `MessageUnpinned(dialogId, messageId)` | Закреп изменился |
 | клиент → сервер | `Typing(dialogId)` | Статус «печатает» |
 | сервер → клиент | `UserTyping(dialogId, userId)` | Собеседник печатает |
-| сервер → клиент | `PresenceChanged(userId, status)` | `online` / `offline` для тех, с кем есть диалоги |
+| сервер → клиент | `PresenceChanged(userId, status, lastSeen)` | `online` / `offline` для тех, с кем есть диалоги; `lastSeen` — время ухода (UTC) |
+| клиент → сервер | `MarkRead(dialogId, upToId)` | Отметить диалог прочитанным до сообщения |
+| сервер → клиент | `MessagesRead(dialogId, readerId, upToId)` | Участникам: сообщения прочитаны |
+| клиент → сервер | `GetOnlineContacts()` / `GetLastSeen()` | Кто из собеседников онлайн / когда были в сети |
+| сервер → клиент | `ReactionChanged(dialogId, messageId, userId, emoji \| null)` | Реакция поставлена, заменена или снята |
+| сервер → клиент | `DialogsChanged` | Беседу создали, изменили или удалили: перезагрузить список диалогов |
 
-Ошибки хаба приходят клиенту как `HubException` с кодом в сообщении: `forbidden` (не участник диалога), `invalid_text`, `invalid_client_message_id`, `invalid_reply_to`, `rate_limited`, `unauthorized`.
+Ошибки хаба приходят клиенту как `HubException` с кодом в сообщении: `forbidden` (не участник диалога), `invalid_text`, `invalid_client_message_id`, `invalid_reply_to`, `invalid_message_id`, `rate_limited`, `unauthorized`.
 
 Соединение закрывается сервером, когда истекает access-токен, с которым оно открыто; клиент переподключается со свежим токеном.
 
@@ -207,20 +230,27 @@ dialog  { id, createdAt, peer: user, lastMessage: message | null, unreadCount, p
 
 Основное хранилище. В качестве ключа используется **ULID**.
 
-Предварительная модель данных (уточняется программистом БД):
+Модель данных:
 
 ```
-users        (id ULID PK, login, email, password_hash, display_name, avatar_url, bio, created_at, last_seen_at)
-dialogs      (id ULID PK, created_at)
-dialog_members (dialog_id FK, user_id FK, joined_at, PRIMARY KEY (dialog_id, user_id))
+users        (id ULID PK, login, email, email_confirmed_at, password_hash, display_name, avatar_url, bio,
+              appearance jsonb, created_at, last_seen_at)
+dialogs      (id ULID PK, created_at, pair_key UNIQUE, kind, title, avatar_url, created_by_id)
+dialog_members (dialog_id FK, user_id FK, joined_at, role, last_read_id, PRIMARY KEY (dialog_id, user_id))
 messages     (id ULID PK, client_message_id, dialog_id FK, sender_id FK,
               text, media_url NULL, created_at, edited_at NULL, deleted_at NULL,
               reply_to_id NULL FK→messages (ON DELETE SET NULL),
               forwarded_from_id NULL, forwarded_from_name NULL,
+              kind, media_width, media_height, media_duration_ms,
               UNIQUE (sender_id, client_message_id))
 pinned_messages (dialog_id FK, message_id FK, pinned_by_id, pinned_at, PRIMARY KEY (dialog_id, message_id))
 message_hides   (message_id FK, user_id FK, created_at)   -- «удалить у меня»
+message_reactions (message_id, user_id, dialog_id, emoji, created_at, PRIMARY KEY (message_id, user_id))
+refresh_tokens  (id, user_id, token_hash, created_at, expires_at, revoked_at, replaced_by_id)
+email_tokens    (id, user_id, purpose confirm|reset, token_hash, created_at, expires_at, used_at)
 ```
+
+Схема ведётся миграциями EF Core (`Data/Migrations`).
 
 Особенности реализации:
 
@@ -233,11 +263,11 @@ message_hides   (message_id FK, user_id FK, created_at)   -- «удалить у
 
 ### Presence
 
-Эфемерные статусы «онлайн» и «печатает» хранятся в памяти процесса. Сервер рассчитан на один инстанс; для горизонтального масштабирования понадобится общий backplane для SignalR и общее хранилище статусов.
+Эфемерные статусы «онлайн» и «печатает» хранятся в памяти процесса. Сервер рассчитан на один инстанс; для горизонтального масштабирования понадобится общий backplane для SignalR и общее хранилище статусов. Время «был(а) в сети» (`users.last_seen_at`) хранится в БД.
 
 ### S3
 
-Хранилище изображений и видео. Бэкенд только выдаёт Pre-signed URL; доступ к объектам ограничен.
+Хранилище аватарок, обоев, фото и голосовых сообщений (S3-совместимое; на проде — Yandex Object Storage). Бэкенд сам читает и пишет объекты; бакет закрытый. Подробности — в разделе «Файловое хранилище (S3)».
 
 ## 7. Ключевые сценарии
 
@@ -260,12 +290,12 @@ message_hides   (message_id FK, user_id FK, created_at)   -- «удалить у
 
 Ограничение: удаления старых сообщений в дельту не попадают, поскольку выдача идёт по ULID. Клиент получает их через событие `MessageDeleted` или при полной перезагрузке истории.
 
-### Загрузка медиа
+### Отправка фото и голосовых
 
-1. Клиент запрашивает `POST /api/media/upload-url`.
-2. Бэкенд генерирует Pre-signed URL с коротким сроком жизни.
-3. Клиент загружает файл напрямую в S3.
-4. В сообщении сохраняется ссылка на объект.
+1. Клиент пишет сообщение в RxDB со статусом `pending` (вложение ждёт в памяти вкладки).
+2. Клиент отправляет `POST /api/dialogs/{id}/messages/media` (multipart: файл, `clientMessageId`, `kind`).
+3. Сервер проверяет членство в диалоге, перекодирует фото в WebP (или проверяет формат голосового по первым байтам) и кладёт файл в S3 по ключу `media/{dialogId}/{ulid}.{ext}`.
+4. Сообщение сохраняется со ссылкой `/api/dialogs/{id}/media/{name}` и рассылается участникам событием `MessageReceived`. Повтор с тем же `clientMessageId` дубликата не создаёт.
 
 ## 8. Безопасность и шифрование
 
@@ -279,9 +309,9 @@ message_hides   (message_id FK, user_id FK, created_at)   -- «удалить у
 | Авторизация | Проверка членства в диалоге при каждом чтении/записи сообщений |
 | Валидация ввода | На сервере; экранирование вывода на клиенте (защита от XSS) |
 | Защита от SQL-инъекций | Параметризованные запросы (EF Core, Dapper) |
-| Ограничение частоты | Авторизация — 10 запросов в минуту с IP; остальной REST — 60 в минуту на пользователя (`RateLimiting:UsersPerMinute`); хаб — по методам. Перебор пароля: 10 неудач на пару «IP + логин» и 50 на аккаунт за 15 минут |
+| Ограничение частоты | Авторизация — 10 запросов в минуту с IP; остальной REST — 300 в минуту на пользователя (`RateLimiting:UsersPerMinute`); хаб — по методам. Перебор пароля: 10 неудач на пару «IP + логин» и 50 на аккаунт за 15 минут |
 | CORS и заголовки | Строгая политика CORS (список origin в конфигурации); CSP и HSTS — заголовки ответа |
-| Шифрование хранилищ | Шифрование диска/БД и server-side encryption в S3 |
+| Шифрование хранилищ | Шифрование дисков и объектов на стороне провайдера (Neon, Yandex Object Storage) |
 | Секреты | Только через переменные окружения / секретницу, не в репозитории |
 | Логи | Тексты сообщений и токены в логи не пишутся |
 
@@ -289,13 +319,12 @@ message_hides   (message_id FK, user_id FK, created_at)   -- «удалить у
 
 В MVP **не реализуется.** Причины: усложняет серверный поиск и синхронизацию дельты, требует управления ключами и поддержки нескольких устройств (протокол уровня Signal), а срок проекта и размер команды ограничены. Сервер может читать содержимое сообщений, поэтому защита строится на разграничении доступа и защите инфраструктуры.
 
-Допустимый компромисс — шифрование текста сообщения в БД на уровне приложения (AES-GCM, ключ вне БД). Решение принимается командой отдельно.
 
 ## 9. Тестирование
 
 Тесты пишутся для обеих частей проекта; ответственный за организацию — тестировщик, но тесты к своему коду пишет каждый разработчик.
 
-### Backend (`backend/`)
+### Backend (`backend/`, `dotnet test`)
 
 | Уровень | Что проверяем | Инструменты |
 |---------|---------------|-------------|
@@ -303,13 +332,17 @@ message_hides   (message_id FK, user_id FK, created_at)   -- «удалить у
 | Интеграционные | REST-эндпоинты, работа с PostgreSQL, идемпотентность | WebApplicationFactory, Testcontainers (нужен Docker) |
 | SignalR | Отправка/получение событий, права доступа | Microsoft.AspNetCore.SignalR.Client |
 
-### Frontend (`frontend/`)
+Для API-тестов файловое хранилище подменяется `InMemoryFileStorage`, настоящий S3 не нужен. Живой тест против реального бакета запускается только при заданных `STORAGE_TEST_*` (см. «Файловое хранилище»).
+
+### Frontend (`Frontend/`)
 
 | Уровень | Что проверяем | Инструменты |
 |---------|---------------|-------------|
-| Unit | Утилиты, хуки, логика синхронизации | Vitest / Jest |
-| Компонентные | Рендер и поведение компонентов | React Testing Library |
-| E2E | Регистрация → поиск → диалог → сообщение | Playwright / Cypress |
+| Unit | Утилиты, `api.ts` (запросы, ошибки, обновление токена), `theme.ts`, `persist.ts`, `notify.ts`, `Avatar` | Vitest (`npm test`) |
+| Интеграционные | `ChatProvider` целиком (синхронизация, входящие, отправка Offline-First, правка, удаление, реакции, присутствие), `AuthProvider`, локальная база | Vitest + jsdom + React Testing Library; RxDB на IndexedDB в памяти (`fake-indexeddb`); SignalR подменён, REST — через подмену `fetch` |
+
+### Общие тесты
+| E2E | Регистрация → поиск → диалог → сообщение | не реализовано |
 
 ### Ключевые тест-кейсы
 
@@ -329,8 +362,11 @@ Messenger1/
 │   ├── Messenger.sln
 │   ├── src/Messenger.Api/     # REST API + SignalR Hub
 │   └── tests/Messenger.Tests/ # unit и интеграционные тесты
-├── frontend/    # отдельная папка фронтенда + тесты
-├── docs/
+├── Frontend/        # React + TS + RxDB, тесты Vitest
+├── Infrastructure/  # docker-compose.yml (PostgreSQL для разработки)
+├── Dockerfile       # сборка фронтенда и бэкенда в один образ
+├── .github/workflows/ci.yml
+├── API.md
 ├── README.md
 └── DOCUMENTATION.md
 ```
@@ -347,10 +383,10 @@ DevOps-задачи (CI/CD, развёртывание) распределяют
 ## 11. Развёртывание
 
 - Сервер или облачный сервер с Docker
-- Контейнеры: backend (вместе с собранным фронтендом), PostgreSQL, S3-совместимое хранилище
+- Контейнер backend (вместе с собранным фронтендом); PostgreSQL (Neon) и S3-совместимое хранилище (Yandex Object Storage) — внешние сервисы
 - CI/CD: сборка и прогон тестов на каждый Pull Request, автоматический деплой из `main`
 
-Для локальной разработки `docker compose up -d` поднимает PostgreSQL и MinIO. Конфигурация бэкенда задаётся переменными окружения (см. `.env.example`).
+Для локальной разработки `docker compose -f Infrastructure/docker-compose.yml up -d` поднимает только PostgreSQL; файловое хранилище локально не поднимается (файловые функции отвечают 503). Конфигурация бэкенда задаётся переменными окружения (см. `.env.example`).
 
 ### Письма в продакшене
 
@@ -392,16 +428,16 @@ DevOps-задачи (CI/CD, развёртывание) распределяют
 
 | Область | Статус |
 |---------|--------|
-| Модели и схема БД (EF Core), миграции | Реализовано; последняя миграция добавляет профиль (`bio`), ответы, пересылку, закреп и триграммные индексы поиска |
+| Модели и схема БД (EF Core), миграции | Реализовано; 10 миграций: от `InitialCreate` до `AddEmailTokens` (профиль, ответы, пересылка, закреп, триграммные индексы, оформление, беседы и вложения, реакции, токены из писем) |
 | Сохранение сообщений через Dapper, идемпотентность | Реализовано |
 | SignalR Hub (отправка, ответы, подтверждение, печатает, прочитано, присутствие) | Реализовано |
 | REST: аутентификация, профиль, раздельный поиск людей и сообщений, диалоги, история, правка, удаление, закреп, пересылка | Реализовано |
 | Presence | В памяти процесса (один инстанс) |
 | Refresh-токены, отзыв при выходе и смене пароля | Реализовано; очистка просроченных — фоновая задача раз в час |
-| Медиа: фото, голосовые, видео, аватарки с кадрированием (S3) | Реализовано |
+| Медиа: фото, голосовые, аватарки с кадрированием, обои (S3) | Реализовано; видео не поддерживается |
 | Реакции на сообщения (6 эмодзи, одна на пользователя) | Реализовано: `GET/PUT/DELETE /api/dialogs/{id}/reactions`, событие `ReactionChanged` |
 | Rate limiting | `users` — REST по пользователю, скользящее окно (300/мин); `auth` — вход, регистрация, сброс, по IP (10/мин); `mail` — отправка писем, по IP (5 за 15 мин); методы хаба. `429` содержит `Retry-After`. Состояние в памяти процесса |
-| Восстановление пароля, подтверждение почты | Реализовано: одноразовые токены (в БД только SHA-256), письма по SMTP; см. `API.md` |
+| Восстановление пароля, подтверждение почты | Реализовано: одноразовые токены (в БД только SHA-256), письма через Resend (HTTPS) или SMTP; см. `API.md` |
 | ForwardedHeaders за прокси | Реализовано (`ForwardLimit = 1`, список доверенных прокси задаётся конфигурацией) |
 | Dockerfile, CI | Реализовано |
 | Тесты бэкенда | Написаны; прогон на актуальной среде требует подтверждения |
@@ -418,26 +454,26 @@ DevOps-задачи (CI/CD, развёртывание) распределяют
 - **Настройки сгруппированы:** Аккаунт (профиль, безопасность), Приложение (внешний вид, уведомления), Устройство (сессия и кэш). «Внешний вид»: тема авто/светлая/тёмная и акцентный цвет (хранятся в `localStorage`, `lib/theme.ts`). Вкладки «Синхронизация» нет: синхронизация автоматическая.
 - **Статус «в сети»:** зелёная точка на аватаре (у тех, кто не в сети, точки нет) и зелёная подпись «в сети» в шапке диалога и профиле.
 - **Порционная загрузка:** история диалога — по 50 сообщений (вверх по прокрутке), дельта-синхронизация — по 100; люди и результаты поиска — по 30; список диалогов загружается целиком.
-- Локальная БД теперь `messenger4-…` (добавлены `replyToId`, `fwdFrom`); данные восстанавливаются с сервера при первом запуске.
 
 ## Файловое хранилище (S3)
 
-Файлы (аватарки, обои, голосовые, фото) хранятся не в БД и не на диске сервера (на Render диск эфемерный), а в S3-совместимом хранилище. Код работает через интерфейс `IFileStorage` (`Storage/`): `PutAsync`, `GetAsync`, `DeleteAsync`, `GetDownloadUrl` (временная ссылка). Реализация `S3FileStorage` одинакова для всех провайдеров, различаются только переменные окружения.
+Файлы (аватарки, обои, голосовые, фото) хранятся не в БД и не на диске сервера (на Render диск эфемерный), а в S3-совместимом хранилище. Код работает через интерфейс `IFileStorage` (`Storage/`): `PutAsync`, `GetAsync`, `DeleteAsync`, `CopyAsync`, `ListAsync`. Реализация `S3FileStorage` работает с любым S3-совместимым провайдером; на проде это Yandex Object Storage.
 
-| Переменная | Локально (MinIO) | Прод (Yandex Object Storage) |
-|---|---|---|
-| `Storage__Endpoint` | `http://localhost:9000` | `https://storage.yandexcloud.net` |
-| `Storage__Region` | `us-east-1` | `ru-central1` |
-| `Storage__Bucket` | `messenger` | имя бакета |
-| `Storage__AccessKey` / `Storage__SecretKey` | `messenger` / `messenger_dev_password` | статический ключ сервисного аккаунта |
-| `Storage__ForcePathStyle` | `true` | `false` |
-| `Storage__EnsureBucket` | `true` (бакет создаётся сам) | `false` |
+**Локально хранилище не поднимается.** MinIO убран из `docker-compose`, поэтому при локальной разработке медиа нет (тесты API используют хранилище в памяти, `InMemoryFileStorage`): без `Storage__*` приложение стартует с заглушкой `DisabledFileStorage`, а загрузка аватарок, обоев, фото и голосовых отвечает `503`. Всё остальное работает.
 
-- **Без настроек** приложение стартует с заглушкой `DisabledFileStorage`: файловые функции отвечают 503, остальное работает (удобно для тестов и быстрого запуска без MinIO).
+| Переменная | Прод (Yandex Object Storage) |
+|---|---|
+| `Storage__Endpoint` | `https://storage.yandexcloud.net` |
+| `Storage__Region` | `ru-central1` |
+| `Storage__Bucket` | имя бакета |
+| `Storage__AccessKey` / `Storage__SecretKey` | статический ключ сервисного аккаунта |
+| `Storage__ForcePathStyle` | `false` |
+| `Storage__EnsureBucket` | `false` (бакет создаётся в консоли) |
+
 - **При старте** (если хранилище настроено) в лог пишется «Storage is ready» либо предупреждение с причиной; ошибка хранилища не останавливает приложение.
-- **Настройка Yandex Cloud:** 1) создать бакет (доступ «ограниченный»); 2) создать сервисный аккаунт с ролью `storage.editor` на каталог или бакет; 3) выпустить ему статический ключ доступа (идентификатор и секрет показываются один раз); 4) задать переменные в Environment сервиса на Render. Ключи не коммитятся.
-- **Ключи объектов:** `avatars/{userId}/{ulid}.webp`, `wallpapers/{userId}/{ulid}.webp`, `media/{dialogId}/{ulid}.{ext}`, `voice/{dialogId}/{ulid}.ogg`.
-- **Проверка против настоящего бакета:** интеграционный тест `Live_roundtrip_against_a_real_bucket_when_configured` выполняется, только если заданы `STORAGE_TEST_BUCKET`, `STORAGE_TEST_ACCESS_KEY`, `STORAGE_TEST_SECRET_KEY` (и при необходимости `STORAGE_TEST_ENDPOINT`, `STORAGE_TEST_REGION`, `STORAGE_TEST_PATH_STYLE=true`).
+- **Настройка Yandex Cloud:** 1) создать бакет (доступ «ограниченный»); 2) создать сервисный аккаунт с ролью `storage.editor` на каталог или бакет; 3) выпустить ему статический ключ доступа (идентификатор и секрет показываются один раз); 4) задать переменные в Environment сервиса на Render. Ключи не коммитятся. CORS бакета не нужен: браузер с хранилищем напрямую не общается.
+- **Ключи объектов:** `avatars/{userId}/{ulid}.webp`, `wallpapers/{userId}/{ulid}.webp`, `group-avatars/{dialogId}/{ulid}.webp`, `media/{dialogId}/{ulid}.{webp|ogg|webm|m4a|mp3}`.
+- **Проверка против настоящего бакета:** тест `Live_roundtrip_against_a_real_bucket_when_configured` выполняется, только если заданы `STORAGE_TEST_BUCKET`, `STORAGE_TEST_ACCESS_KEY`, `STORAGE_TEST_SECRET_KEY` (и при необходимости `STORAGE_TEST_ENDPOINT`, `STORAGE_TEST_REGION`); иначе пропускается.
 - Если Yandex отвечает ошибкой подписи при загрузке, первым делом проверьте регион (`ru-central1`) и endpoint; контрольные суммы SDK по умолчанию отключены (`WHEN_REQUIRED`), так как не все S3-совместимые хранилища их понимают.
 
 ## Загрузка аватарок и обои
@@ -445,7 +481,7 @@ DevOps-задачи (CI/CD, развёртывание) распределяют
 - **Обработка** (`Media/ImageProcessor.cs`, SkiaSharp): реальное декодирование, лимит 36 Мпикс (защита от «бомб»), поворот по EXIF, перекодирование в WebP — так в хранилище попадают только безопасные картинки без метаданных.
 - **Ключи:** `avatars/{userId}/{ulid}.webp` (публичные, неизменяемые, кэш на год) и `wallpapers/{userId}/{ulid}.webp` (приватные, путь строится от текущего пользователя). При смене аватарки прежний файл удаляется.
 - **Оформление** (`users.appearance`, jsonb): тема, акцентный цвет, обои (пресет или загруженное фото + затемнение), форма пузырей, плотность, шрифт и размер текста. Клиент держит копию в `localStorage` и синхронизирует с сервером (`lib/theme.ts`), поэтому вид одинаков на всех устройствах. Пресеты обоев — CSS без файлов.
-- **Дальше по той же схеме:** фото и голосовые сообщения (`media/`, `voice/`) — приватные файлы с проверкой членства в диалоге.
+- **Дальше по той же схеме:** фото и голосовые сообщения (`media/`) — приватные файлы с проверкой членства в диалоге.
 
 ## Беседы, фото и голосовые
 
@@ -455,19 +491,6 @@ DevOps-задачи (CI/CD, развёртывание) распределяют
 - **Клиент:** у беседы синтетический `peer` (название и аватар беседы), поэтому список, пересылка и поиск работают без особых случаев; в беседе над входящими сообщениями показывается имя автора, под названием — число участников, при наборе текста — имя печатающего. Создание — кнопка «+» в «Чатах», управление — клик по шапке беседы.
 - **Вложения:** кнопка скрепки (или вставка картинки из буфера) отправляет фото с подписью из поля ввода; микрофон записывает голосовое (до 5 минут, MediaRecorder). Вложения уходят по REST (multipart), офлайн ждут в очереди, пока открыта вкладка. Фото открывается на весь экран, голосовые воспроизводятся по одному.
 - **Хранилище:** `media/{dialogId}/{ulid}.{ext}` (приватно, только участникам) и `group-avatars/{dialogId}/{ulid}.webp` (публично). Локальная БД клиента — `messenger5-…`.
-
-## Видео и CORS бакета
-
-Видео грузится с клиента прямо в бакет (PUT по временной ссылке), поэтому бакету нужно разрешить такую загрузку с адреса сайта:
-
-- **Яндекс Object Storage:** консоль → бакет → «CORS» (или `aws s3api put-bucket-cors --endpoint-url https://storage.yandexcloud.net --bucket <имя> --cors-configuration file://cors.json`).
-  ```json
-  { "CORSRules": [ { "AllowedOrigins": ["https://<адрес вашего сайта>"], "AllowedMethods": ["PUT"], "AllowedHeaders": ["Content-Type"], "MaxAgeSeconds": 3600 } ] }
-  ```
-- **MinIO локально:** по умолчанию разрешает любые источники, отдельной настройки не требуется.
-- Просмотр не требует CORS: `<video>` играет по временной ссылке напрямую.
-- Загрузка, прерванная до шага подтверждения, оставляет в бакете файл-сироту (редкий случай). Периодически чистите такие объекты вручную: в консоли они выглядят как `media/{dialogId}/{id}.mp4` без соответствующего сообщения.
-- Ограничения первой версии: без перекодирования (видео HEVC с iPhone может не играть в Chrome/Firefox на Windows; клиент отклоняет файл, который сам не смог прочитать), без прогресса загрузки.
 
 ## Реакции и кадрирование аватарки
 

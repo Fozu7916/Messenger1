@@ -20,13 +20,14 @@ public sealed class StorageTests
         IFileStorage storage = new DisabledFileStorage();
         await Assert.ThrowsAsync<StorageNotConfiguredException>(() =>
             storage.PutAsync("avatars/x.png", new MemoryStream([1, 2, 3]), 3, "image/png"));
-        Assert.Throws<StorageNotConfiguredException>(() => storage.GetDownloadUrl("avatars/x.png", TimeSpan.FromMinutes(1)));
+        await Assert.ThrowsAsync<StorageNotConfiguredException>(() => storage.GetAsync("avatars/x.png"));
+        await Assert.ThrowsAsync<StorageNotConfiguredException>(() => storage.ListAsync("avatars/", 10));
     }
 
     /// <summary>
-    /// Живая проверка круга «положить → прочитать → ссылка → удалить» против настоящего хранилища (MinIO локально или тестовый бакет Yandex).
+    /// Живая проверка круга «положить → прочитать → удалить» против настоящего хранилища (тестовый бакет Yandex).
     /// Запускается, только если заданы STORAGE_TEST_BUCKET, STORAGE_TEST_ACCESS_KEY, STORAGE_TEST_SECRET_KEY
-    /// (и по необходимости STORAGE_TEST_ENDPOINT, STORAGE_TEST_REGION, STORAGE_TEST_PATH_STYLE=true); иначе тест тихо пропускается.
+    /// (и по необходимости STORAGE_TEST_ENDPOINT, STORAGE_TEST_REGION); иначе тест тихо пропускается.
     /// </summary>
     [Fact]
     public async Task Live_roundtrip_against_a_real_bucket_when_configured()
@@ -39,8 +40,6 @@ public sealed class StorageTests
             Bucket = Env("STORAGE_TEST_BUCKET") ?? "",
             AccessKey = Env("STORAGE_TEST_ACCESS_KEY") ?? "",
             SecretKey = Env("STORAGE_TEST_SECRET_KEY") ?? "",
-            ForcePathStyle = Env("STORAGE_TEST_PATH_STYLE") == "true",
-            EnsureBucket = Env("STORAGE_TEST_PATH_STYLE") == "true",
         };
         if (!options.IsConfigured) return;
 
@@ -60,7 +59,6 @@ public sealed class StorageTests
                 await file.Content.CopyToAsync(back);
                 Assert.Equal(data, back.ToArray());
             }
-            Assert.StartsWith("http", storage.GetDownloadUrl(key, TimeSpan.FromMinutes(1)));
         }
         finally { await storage.DeleteAsync(key); }
         Assert.Null(await storage.GetAsync(key));

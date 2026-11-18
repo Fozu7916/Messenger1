@@ -394,15 +394,6 @@ button{cursor:pointer}
 .pickh{margin:16px 6px 8px}
 .titlerow{margin-bottom:10px}.titlerow .field{flex:1}
 .members .row{padding:8px 10px}
-.vidb{position:relative;display:block;max-width:100%;margin:0 0 6px;border-radius:calc(var(--br) - 6px);overflow:hidden;background:#000}
-.vidb video,.vidplay img{width:100%;height:100%;object-fit:cover;display:block}
-.vidplay{position:absolute;inset:0;width:100%;height:100%;border:0;padding:0;background:#111;cursor:pointer}
-.vidplay:disabled{cursor:wait}
-.pbtn{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:56px;height:56px;border-radius:9999px;background:rgba(0,0,0,.55);color:#fff;display:grid;place-items:center;font-size:22px}
-.pbtn svg{width:24px;height:24px;fill:#fff}
-.vdur{position:absolute;left:8px;bottom:8px;background:rgba(0,0,0,.6);color:#fff;border-radius:9999px;padding:2px 10px;font:500 12px var(--mono)}
-.vfail{position:absolute;left:0;right:0;bottom:0;background:rgba(179,38,30,.9);color:#fff;font-size:13px;padding:6px 10px;text-align:center}
-.vidb.pend::after{content:"";position:absolute;inset:0;background:rgba(0,0,0,.28);pointer-events:none}
 
 .rpick{display:flex;gap:2px;padding:2px 2px 8px;margin-bottom:6px;border-bottom:1px solid var(--line)}
 .ctx .rpick button{width:auto;padding:6px 8px;font-size:20px;line-height:1;border-radius:12px}
@@ -432,7 +423,7 @@ button{touch-action:manipulation;-webkit-tap-highlight-color:transparent}
 .row:active,.navbtn:active,.icbtn:active{transform:scale(.97)}
 .send:active{transform:scale(.9)}
 .msg.mo{padding:4px 4px 3px}
-.msg.mo .imgb,.msg.mo .vidb{margin:0 0 2px;border-radius:calc(var(--br) - 4px)}
+.msg.mo .imgb{margin:0 0 2px;border-radius:calc(var(--br) - 4px)}
 .msg.mo .meta{padding:0 8px 2px}
 @keyframes sheet{from{transform:translateY(100%)}}
 @keyframes fade{from{opacity:0}}

@@ -4,11 +4,11 @@ import * as api from '../lib/api';
 import { useAuth } from '../lib/auth';
 import { previewOf, useChat, useLiveQuery } from '../lib/chat';
 import { fmtDay, fmtLastSeen, fmtTime, matchesAll, sortMessages } from '../lib/format';
-import { canRecord, captureVideoMeta, MAX_VIDEO_BYTES, MAX_VIDEO_MS, useVoiceRecorder } from '../lib/media';
+import { canRecord, useVoiceRecorder } from '../lib/media';
 import { readScroll, saveScroll, usePersisted } from '../lib/persist';
 import type { DialogDoc, MessageDoc } from '../types';
 import { GroupInfo, NewGroupModal, membersLabel } from './GroupModals';
-import { fmtDuration, ImageBubble, Lightbox, VideoBubble, VoicePlayer } from './MediaBits';
+import { fmtDuration, ImageBubble, Lightbox, VoicePlayer } from './MediaBits';
 import { PeerProfile, Modal } from './modals';
 import { Avatar, useToast } from './ui';
 
@@ -449,19 +449,6 @@ function ChatView({ dialog, onClose }: { dialog: DialogDoc; onClose: () => void 
     sendMedia(dialog.id, 'image', f, { text: ta.current!.value.trim().slice(0, 1000), replyToId: replying?.id || undefined });   // подпись — набранный текст
     ta.current!.value = ''; ta.current!.style.height = ''; setHasText(false); setReplying(null); stick.current = true;
   };
-  const sendAttachment = async (f?: File | null) => {
-    if (!f) return;
-    if (f.type.startsWith('image/') || !f.type) { sendImage(f); return; }
-    if (fileIn.current) fileIn.current.value = '';
-    if (!['video/mp4', 'video/webm', 'video/quicktime'].includes(f.type)) { toast('Можно отправить фото, MP4 или WebM'); return; }
-    if (f.size > MAX_VIDEO_BYTES) { toast('Видео больше 50 МБ'); return; }
-    try {
-      const meta = await captureVideoMeta(f);
-      if (meta.durationMs > MAX_VIDEO_MS) { toast('Видео длиннее 3 минут'); return; }
-      sendMedia(dialog.id, 'video', f, { text: ta.current!.value.trim().slice(0, 1000), durationMs: meta.durationMs, width: meta.width, height: meta.height, poster: meta.poster, replyToId: replying?.id || undefined });
-      ta.current!.value = ''; ta.current!.style.height = ''; setHasText(false); setReplying(null); stick.current = true;
-    } catch (e) { toast((e as Error).message); }
-  };
   const startVoice = async () => { try { await voice.start(); } catch { toast('Нет доступа к микрофону — разрешите его в настройках браузера'); } };
   const sendVoice = async () => {
     const r = await voice.finish();
@@ -572,10 +559,10 @@ function ChatView({ dialog, onClose }: { dialog: DialogDoc; onClose: () => void 
     return (
       <div key={m.clientMessageId} style={{ display: 'contents' }}>
         {sep && <div className="day"><span>{d}</span></div>}
-        <div id={m.id ? 'm-' + m.id : undefined} className={`msg ${out ? 'out' : 'in'} ${m.status}${gp ? ' gp' : ''}${(m.kind === 'image' || m.kind === 'video') && !m.text && !m.replyToId && !m.fwdFrom ? ' mo' : ''}`}
+        <div id={m.id ? 'm-' + m.id : undefined} className={`msg ${out ? 'out' : 'in'} ${m.status}${gp ? ' gp' : ''}${m.kind === 'image' && !m.text && !m.replyToId && !m.fwdFrom ? ' mo' : ''}`}
           onContextMenu={(e) => openMenu(e, m)} onTouchStart={(e) => touchStart(e, m)} onTouchEnd={(e) => touchFinish(e, m)} onTouchMove={touchMove} onTouchCancel={(e) => touchFinish(e, m, true)}
           onDoubleClick={(e) => {
-            if (!m.id || m.status !== 'sent' || (e.target as HTMLElement).closest('button,a,audio,video')) return;
+            if (!m.id || m.status !== 'sent' || (e.target as HTMLElement).closest('button,a,audio')) return;
             window.getSelection()?.removeAllRanges();
             toggleReact(m, '👍');
           }}>
@@ -596,7 +583,6 @@ function ChatView({ dialog, onClose }: { dialog: DialogDoc; onClose: () => void 
             </button>
           )}
           {m.kind === 'image' && m.media && <ImageBubble m={m} onOpen={setLightbox} />}
-          {m.kind === 'video' && m.media && <VideoBubble m={m} />}
           {m.kind === 'voice' && m.media && <VoicePlayer m={m} />}
           {m.text && <span className="txt">{m.text}</span>}
           {m.id && Object.keys(reactions[m.id] ?? {}).length > 0 && (
@@ -704,8 +690,8 @@ function ChatView({ dialog, onClose }: { dialog: DialogDoc; onClose: () => void 
         <div className={'compin' + (voice.recording ? ' hide' : '')}>
           {!editing && (
             <>
-              <input ref={fileIn} type="file" accept="image/*,video/mp4,video/webm,video/quicktime" hidden onChange={(e) => void sendAttachment(e.target.files?.[0])} />
-              <button className="icbtn" onClick={() => fileIn.current?.click()} aria-label="Прикрепить фото или видео" title="Прикрепить фото или видео"><Clip /></button>
+              <input ref={fileIn} type="file" accept="image/*" hidden onChange={(e) => sendImage(e.target.files?.[0])} />
+              <button className="icbtn" onClick={() => fileIn.current?.click()} aria-label="Прикрепить фото" title="Прикрепить фото"><Clip /></button>
             </>
           )}
           <textarea ref={ta} rows={1} maxLength={4000} placeholder={editing ? 'Новый текст сообщения' : 'Сообщение'} aria-label="Сообщение"

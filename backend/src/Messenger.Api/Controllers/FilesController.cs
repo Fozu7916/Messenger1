@@ -164,22 +164,8 @@ public sealed class FilesController(AppDbContext db, IFileStorage storage, IDial
     public async Task<IActionResult> GetMedia(string dialogId, string name, CancellationToken ct)
     {
         if (!IsUlid(dialogId) || !MediaKeys.IsValidName(name) || !await access.IsMemberAsync(dialogId, User.GetUserId(), ct)) return NotFound();
-        if (name.EndsWith(".mp4") || name.EndsWith(".webm") && await IsVideoMessageAsync(dialogId, name, ct))
-            return Problem(statusCode: StatusCodes.Status400BadRequest, title: "Video is delivered by temporary link: GET .../media/{name}/url");
         return await ServeAsync(MediaKeys.Key(dialogId, name), "private, max-age=31536000, immutable", ct, MediaKeys.ContentType(name[27..]));
     }
-
-    /// <summary>Временная ссылка на видео прямо в хранилище (1 час): браузер сам тянет файл и умеет перематывать.</summary>
-    [HttpGet("api/dialogs/{dialogId}/media/{name}/url")]
-    public async Task<IActionResult> GetMediaLink(string dialogId, string name, CancellationToken ct)
-    {
-        if (!IsUlid(dialogId) || !MediaKeys.IsValidName(name) || !await access.IsMemberAsync(dialogId, User.GetUserId(), ct)) return NotFound();
-        try { return Ok(new { url = storage.GetDownloadUrl(MediaKeys.Key(dialogId, name), TimeSpan.FromHours(1)) }); }
-        catch (StorageNotConfiguredException) { return Unavailable(); }
-    }
-
-    private Task<bool> IsVideoMessageAsync(string dialogId, string name, CancellationToken ct) =>
-        db.Messages.AsNoTracking().AnyAsync(m => m.DialogId == dialogId && m.Kind == "video" && m.MediaUrl == MediaKeys.Url(dialogId, name), ct);
 
     // ---------------- Общее ----------------
 

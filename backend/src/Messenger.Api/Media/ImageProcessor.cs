@@ -28,9 +28,6 @@ public static class ImageProcessor
     /// <summary>Фото в сообщении: до 1600 px по большей стороне, WebP; возвращает и итоговые размеры (для заглушки в чате).</summary>
     public static (byte[] Data, int Width, int Height) Photo(Stream input) => Fit(input, 1600, 82);
 
-    /// <summary>Превью видео: до 640 px, WebP.</summary>
-    public static byte[] Poster(Stream input) => Fit(input, 640, 75).Data;
-
     private static (byte[] Data, int Width, int Height) Fit(Stream input, int max, int quality)
     {
         using var src = Decode(input);

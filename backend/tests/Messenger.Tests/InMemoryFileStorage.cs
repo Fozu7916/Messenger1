@@ -29,21 +29,8 @@ public sealed class InMemoryFileStorage : IFileStorage
         return Task.CompletedTask;
     }
 
-    public Task<long?> SizeAsync(string key, CancellationToken ct = default) =>
-        Task.FromResult<long?>(_files.TryGetValue(key, out var f) ? f.Data.Length : null);
-
-    public Task<byte[]?> ReadStartAsync(string key, int count, CancellationToken ct = default) =>
-        Task.FromResult<byte[]?>(_files.TryGetValue(key, out var f) ? f.Data.Take(count).ToArray() : null);
-
-    public string GetUploadUrl(string key, string contentType, TimeSpan ttl) => "http://test.local/upload/" + key;
-
-    /// <summary>Имитация шага 2: клиент загрузил файл в хранилище по временной ссылке.</summary>
-    public void Seed(string key, byte[] data, string contentType = "video/mp4") => _files[key] = (data, contentType);
-
     public Task<IReadOnlyList<string>> ListAsync(string prefix, int max, CancellationToken ct = default) =>
         Task.FromResult<IReadOnlyList<string>>(_files.Keys.Where(k => k.StartsWith(prefix, StringComparison.Ordinal)).OrderBy(k => k).Take(max).ToList());
-
-    public string GetDownloadUrl(string key, TimeSpan ttl) => "http://test.local/" + key;
 
     private sealed class File(byte[] data, string contentType, string key) : IStoredFile
     {

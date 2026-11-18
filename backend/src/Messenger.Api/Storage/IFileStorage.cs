@@ -24,20 +24,8 @@ public interface IFileStorage
     /// <summary>Копия объекта на стороне хранилища (без скачивания); бросает исключение, если исходного нет.</summary>
     Task CopyAsync(string sourceKey, string destinationKey, CancellationToken ct = default);
 
-    /// <summary>Размер объекта в байтах; null — объекта нет.</summary>
-    Task<long?> SizeAsync(string key, CancellationToken ct = default);
-
-    /// <summary>Первые count байт объекта (для проверки формата без скачивания всего файла); null — объекта нет.</summary>
-    Task<byte[]?> ReadStartAsync(string key, int count, CancellationToken ct = default);
-
-    /// <summary>Временная ссылка для загрузки (PUT) прямо в хранилище, минуя API. Клиент обязан отправить тот же Content-Type.</summary>
-    string GetUploadUrl(string key, string contentType, TimeSpan ttl);
-
     /// <summary>Ключи с данным префиксом (не больше max).</summary>
     Task<IReadOnlyList<string>> ListAsync(string prefix, int max, CancellationToken ct = default);
-
-    /// <summary>Временная ссылка на скачивание в обход API (для закрытого бакета).</summary>
-    string GetDownloadUrl(string key, TimeSpan ttl);
 }
 
 /// <summary>Хранилище не настроено (не заданы Storage__Bucket, Storage__AccessKey, Storage__SecretKey).</summary>
@@ -51,9 +39,5 @@ public sealed class DisabledFileStorage : IFileStorage
     public Task<IStoredFile?> GetAsync(string key, CancellationToken ct = default) => throw new StorageNotConfiguredException();
     public Task DeleteAsync(string key, CancellationToken ct = default) => throw new StorageNotConfiguredException();
     public Task CopyAsync(string sourceKey, string destinationKey, CancellationToken ct = default) => throw new StorageNotConfiguredException();
-    public Task<long?> SizeAsync(string key, CancellationToken ct = default) => throw new StorageNotConfiguredException();
-    public Task<byte[]?> ReadStartAsync(string key, int count, CancellationToken ct = default) => throw new StorageNotConfiguredException();
-    public string GetUploadUrl(string key, string contentType, TimeSpan ttl) => throw new StorageNotConfiguredException();
     public Task<IReadOnlyList<string>> ListAsync(string prefix, int max, CancellationToken ct = default) => throw new StorageNotConfiguredException();
-    public string GetDownloadUrl(string key, TimeSpan ttl) => throw new StorageNotConfiguredException();
 }

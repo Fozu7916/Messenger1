@@ -1,7 +1,7 @@
 # API: контракт для фронтенда
 
 Базовый адрес в разработке: `http://localhost:5080`. Интерактивная документация REST: `http://localhost:5080/swagger`.
-Полное описание архитектуры — в [DOCUMENTATION.md](../DOCUMENTATION.md), раздел 5.
+Полное описание архитектуры — в [DOCUMENTATION.md](DOCUMENTATION.md), раздел 5.
 
 ## Общие правила
 
@@ -20,10 +20,11 @@
 | `401` | Нет токена, токен просрочен или неверный логин/пароль |
 | `404` | Не найдено **или нет доступа** (чужой диалог выглядит как несуществующий) |
 | `409` | Логин или email уже заняты |
+| `403` | Вход без подтверждённой почты, если включён `Auth:RequireConfirmedEmail` |
 | `429` | Превышен лимит: `/api/auth/*` — 10 в минуту с IP, письма — 5 за 15 минут с IP, остальной REST — 300 в минуту на пользователя. Заголовок `Retry-After` — через сколько секунд повторить |
 
 - CORS: разрешён origin `http://localhost:5173` (меняется в конфигурации бэкенда).
-- Токен живёт 60 минут, refresh-токенов пока нет: при `401` отправляйте пользователя на вход.
+- Access-токен живёт 15 минут (`Jwt:AccessTokenMinutes`). Refresh-токен (30 дней) лежит в httpOnly-cookie `rt`: `POST /api/auth/refresh` (нужен заголовок `X-Requested-With`) выдаёт новый access-токен и ротирует refresh. Если refresh не удался (`401`), отправляйте пользователя на вход.
 
 ## Типы
 
@@ -47,6 +48,10 @@ interface Message {
   replyToId: string | null;          // ответ на сообщение этого же диалога
   forwardedFromId: string | null;    // автор оригинала, если сообщение переслано
   forwardedFromName: string | null;  // его имя на момент пересылки
+  kind: 'text' | 'image' | 'voice' | 'system';
+  mediaWidth: number | null;         // фото
+  mediaHeight: number | null;
+  mediaDurationMs: number | null;    // голосовое
 }
 
 interface Profile {                  // GET/PUT /api/users/me, GET /api/users/{id}
@@ -65,6 +70,12 @@ interface Dialog {
   createdAt: string;
   peer: User | null;
   lastMessage: Message | null;
+  unreadCount: number;
+  peerLastReadId: string | null;     // у бесед всегда null
+  kind: 'direct' | 'group';
+  title: string | null;              // название беседы
+  memberCount: number;
+  myRole: 'owner' | 'member';
 }
 
 interface AuthResponse {
@@ -93,10 +104,11 @@ POST /api/auth/login
 В `login` можно передать логин или email. Ответ `200` — `AuthResponse`, неверные данные — `401`.
 
 ```http
+POST /api/auth/refresh       (cookie rt + заголовок X-Requested-With)   → AuthResponse
 POST /api/auth/logout        → 204
 ```
 
-Выход stateless: клиент просто удаляет токен и закрывает соединение хаба.
+Выход отзывает refresh-токен и очищает cookie; клиент также удаляет access-токен и закрывает соединение хаба.
 
 ### Профиль и поиск
 
@@ -218,6 +230,9 @@ await connection.start();
 | `SendMessage` | `clientMessageId: string`, `dialogId: string`, `text: string` | `string` — серверный ULID | Отправить сообщение |
 | `SendReply` | `clientMessageId`, `dialogId`, `text`, `replyToId: string` | `string` — серверный ULID | Отправить ответ на сообщение этого же диалога |
 | `Typing` | `dialogId: string` | — | Сообщить, что пользователь печатает |
+| `MarkRead` | `dialogId`, `upToId: string` | — | Отметить диалог прочитанным до сообщения (до 60 вызовов за 10 с) |
+| `GetOnlineContacts` | — | `string[]` — id собеседников онлайн | Снимок присутствия при подключении (20 в минуту) |
+| `GetLastSeen` | — | `{ [userId]: UTC }` | «Был(а) в сети» для тех, кто не онлайн (20 в минуту) |
 
 Ограничения `SendMessage` и `SendReply`: `clientMessageId` — до 64 символов (удобно `crypto.randomUUID()`), `text` — 1–4000 символов после обрезки пробелов.
 
@@ -239,10 +254,13 @@ const serverUlid = await connection.invoke<string>(
 | `MessageEdited` | `Message` | Всем участникам диалога |
 | `MessagePinned` | `dialogId`, `Message`, `pinnedById` | Всем участникам диалога |
 | `MessageUnpinned` | `dialogId`, `messageId` | Всем участникам диалога |
+| `MessagesRead` | `dialogId`, `readerId`, `upToId` | Всем участникам диалога, включая другие устройства читающего |
+| `ReactionChanged` | `dialogId`, `messageId`, `userId`, `emoji \| null` | Всем участникам диалога (`null` — реакцию сняли) |
+| `DialogsChanged` | — | Всем затронутым беседой: перезагрузить список диалогов |
 | `UserTyping` | `dialogId`, `userId` | Остальным участникам диалога |
-| `PresenceChanged` | `userId`, `status` | Тем, с кем у пользователя есть диалоги |
+| `PresenceChanged` | `userId`, `status`, `lastSeen` | Тем, с кем у пользователя есть диалоги; `lastSeen` — UTC, заполнено при `offline` |
 
-`PresenceChanged` сообщает только об изменениях. Текущий статус собеседников при подключении сервер пока не присылает.
+`PresenceChanged` сообщает только об изменениях; текущий статус при (пере)подключении берите через `GetOnlineContacts` и `GetLastSeen`.
 
 ### Ошибки хаба
 
@@ -254,10 +272,11 @@ const serverUlid = await connection.invoke<string>(
 | `invalid_text` | Пустой текст или длиннее 4000 символов |
 | `invalid_client_message_id` | Пустой или длиннее 64 символов |
 | `invalid_reply_to` | `replyToId` не ULID, не из этого диалога или сообщение удалено |
+| `invalid_message_id` | `upToId` в `MarkRead` не ULID |
 | `rate_limited` | Слишком частые вызовы (`SendMessage`/`SendReply` — 20 за 10 с) |
+| `unauthorized` | Нет идентификатора пользователя в токене |
 
 Соединение закрывается сервером, когда истекает access-токен, с которым оно открыто; клиент переподключается с актуальным токеном (`accessTokenFactory`).
-| `unauthorized` | Нет идентификатора пользователя в токене |
 
 ## Сценарии
 
@@ -312,7 +331,7 @@ if (existing) {
 
 ## Файлы: аватар, обои, оформление
 
-Файлы лежат в S3 (см. раздел «Файловое хранилище» в DOCUMENTATION.md). Без настроенного хранилища все файловые эндпоинты отвечают `503`.
+Файлы лежат в S3 (см. раздел «Файловое хранилище» в DOCUMENTATION.md). Без настроенного хранилища (так при локальной разработке) все файловые эндпоинты отвечают `503`.
 
 ```http
 POST   /api/users/me/avatar            multipart, поле file (JPEG/PNG/WebP/GIF, до 5 МБ)   → Profile
@@ -366,37 +385,21 @@ POST /api/dialogs/{dialogId}/messages/media     multipart/form-data → Message
 GET  /api/dialogs/{dialogId}/media/{ulid}.{webp|ogg|webm|m4a|mp3}    → файл (только участникам диалога, по токену)
 ```
 
+Реакции на сообщения:
+
+```http
+GET    /api/dialogs/{dialogId}/reactions                  → [{ "messageId", "userId", "emoji" }]   (последние 3000)
+PUT    /api/dialogs/{dialogId}/reactions/{messageId}      { "emoji": "👍" }   → 204   (👍 ❤️ 😂 😮 😢 🔥; новая заменяет прежнюю)
+DELETE /api/dialogs/{dialogId}/reactions/{messageId}      → 204
+```
+
+Событие `ReactionChanged` уходит всем участникам диалога.
+
 - В `Message` появились поля `kind` (`text` | `image` | `voice` | `system`), `mediaUrl` (путь выше), `mediaWidth`, `mediaHeight` (фото), `mediaDurationMs` (голосовое). У вложений `text` — подпись (может быть пустой).
 - Фото декодируется и перекодируется в WebP до 1600 px (метаданные удаляются). Голосовое проверяется по первым байтам (webm — Chrome/Edge, ogg — Firefox, m4a — Safari, mp3); расширению и Content-Type клиента сервер не верит.
 - Файлы приватны: `<img>`/`<audio>` не умеют слать токен, поэтому клиент берёт их через `fetch`, кэширует в Cache Storage и показывает blob-ссылкой.
 - Удаление сообщения «у обоих» удаляет и файл. Пересылка вложения создаёт копию файла в целевом диалоге (удаление оригинала копию не ломает). Удаление диалога/беседы удаляет все его вложения.
 - Ответ — `201/200 Message`; повтор с тем же `clientMessageId` вернёт то же сообщение и не создаст второго файла. Участникам уходит `MessageReceived`. Хранилище не настроено — `503`.
-
-## Видео
-
-MP4 (в том числе `.mov` с H.264) и WebM, до 50 МБ и 3 минут. Сервер видео **не перекодирует и не пропускает через себя**: файл едет с клиента прямо в хранилище по временной ссылке, а смотрят его тоже по временной ссылке (перемотка работает штатно).
-
-```http
-# 1. получить ссылку для загрузки
-POST /api/dialogs/{dialogId}/video/upload     { "contentType": "video/mp4", "size": 12345678, "durationMs": 42000 }
-  → { "fileId": "...", "ext": "mp4", "uploadUrl": "https://...", "contentType": "video/mp4", "expiresAt": "..." }
-
-# 2. клиент загружает файл в хранилище (минуя API)
-PUT {uploadUrl}      заголовок Content-Type = contentType из ответа, тело — файл
-
-# 3. подтвердить и создать сообщение
-POST /api/dialogs/{dialogId}/messages/video   multipart: clientMessageId, fileId, ext, durationMs, width, height,
-                                              text? (подпись), replyToId?, poster? (кадр-превью, до 2 МБ)   → Message (kind = "video")
-
-# просмотр
-GET  /api/dialogs/{dialogId}/media/{name}/url                         → { "url": "https://..." }   (действует час, только участникам)
-GET  /api/dialogs/{dialogId}/media/{id}.webp                          → кадр-превью (id = id файла видео)
-```
-
-- Шаг 3 проверяет, что файл загружен, не больше 50 МБ и по первым байтам действительно MP4/WebM (иначе файл удаляется, `400`). Повтор с тем же `clientMessageId` возвращает то же сообщение.
-- `GET .../media/{name}` для видео отвечает `400`: используйте ссылку из `.../url`.
-- Удаление сообщения удаляет видео и превью; пересылка копирует файлы на стороне хранилища.
-- Хранилищу нужен **CORS на PUT** для адреса сайта (см. DOCUMENTATION.md).
 
 ## Восстановление пароля и подтверждение почты
 

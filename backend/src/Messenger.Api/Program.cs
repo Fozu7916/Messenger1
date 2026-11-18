@@ -34,7 +34,7 @@ builder.Services.AddDbContext<AppDbContext>((sp, o) =>
     o.UseNpgsql(sp.GetRequiredService<NpgsqlDataSource>()).UseSnakeCaseNamingConvention());
 builder.Services.AddScoped<IMessageRepository, MessageRepository>();
 builder.Services.AddScoped<IDialogAccess, DialogAccess>();
-builder.Services.AddFileStorage(config);   // S3: Yandex Object Storage (прод) / MinIO (локально); без настроек — заглушка
+builder.Services.AddFileStorage(config);   // S3: Yandex Object Storage (прод); без настроек (локально) — заглушка
 
 // ---------- Аутентификация ----------
 builder.Services.AddSingleton<ITokenService, TokenService>();
