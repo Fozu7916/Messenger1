@@ -26,6 +26,9 @@ public interface IFileStorage
 
     /// <summary>Ключи с данным префиксом (не больше max).</summary>
     Task<IReadOnlyList<string>> ListAsync(string prefix, int max, CancellationToken ct = default);
+
+    /// <summary>Удаляет все объекты с данным префиксом (батчами с пагинацией).</summary>
+    Task DeletePrefixAsync(string prefix, CancellationToken ct = default);
 }
 
 /// <summary>Хранилище не настроено (не заданы Storage__Bucket, Storage__AccessKey, Storage__SecretKey).</summary>
@@ -40,4 +43,5 @@ public sealed class DisabledFileStorage : IFileStorage
     public Task DeleteAsync(string key, CancellationToken ct = default) => throw new StorageNotConfiguredException();
     public Task CopyAsync(string sourceKey, string destinationKey, CancellationToken ct = default) => throw new StorageNotConfiguredException();
     public Task<IReadOnlyList<string>> ListAsync(string prefix, int max, CancellationToken ct = default) => throw new StorageNotConfiguredException();
+    public Task DeletePrefixAsync(string prefix, CancellationToken ct = default) => throw new StorageNotConfiguredException();
 }

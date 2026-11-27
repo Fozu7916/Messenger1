@@ -64,7 +64,8 @@ public sealed class RecoveryTests(ApiFactory factory)
     public async Task Forgot_password_for_unknown_email_returns_204_and_sends_nothing()
     {
         var mail = new CapturingEmailSender();
-        var http = With(factory, mail).CreateClient();
+        await using var app = With(factory, mail);
+        using var http = app.CreateClient();
         var email = $"nobody{Guid.NewGuid():N}@test.local";
 
         var resp = await http.PostAsJsonAsync("/api/auth/forgot-password", new { email });
@@ -78,7 +79,8 @@ public sealed class RecoveryTests(ApiFactory factory)
     public async Task Reset_password_changes_password_and_token_is_single_use()
     {
         var mail = new CapturingEmailSender();
-        var http = With(factory, mail).CreateClient();
+        await using var app = With(factory, mail);
+        using var http = app.CreateClient();
         var (login, email) = await RegisterAsync(http);
 
         Assert.Equal(HttpStatusCode.NoContent, (await http.PostAsJsonAsync("/api/auth/forgot-password", new { email })).StatusCode);
@@ -98,7 +100,8 @@ public sealed class RecoveryTests(ApiFactory factory)
     public async Task Weak_new_password_is_rejected_and_does_not_burn_the_token()
     {
         var mail = new CapturingEmailSender();
-        var http = With(factory, mail).CreateClient();
+        await using var app = With(factory, mail);
+        using var http = app.CreateClient();
         var (_, email) = await RegisterAsync(http);
         await http.PostAsJsonAsync("/api/auth/forgot-password", new { email });
         var token = await mail.TokenAsync(email, "Сброс");
@@ -113,7 +116,8 @@ public sealed class RecoveryTests(ApiFactory factory)
     [Fact]
     public async Task Unknown_reset_token_returns_400()
     {
-        var http = With(factory, new CapturingEmailSender()).CreateClient();
+        await using var app = With(factory, new CapturingEmailSender());
+        using var http = app.CreateClient();
 
         var resp = await http.PostAsJsonAsync("/api/auth/reset-password",
             new { token = new string('a', 43), newPassword = "GoodPassw0rd!" });
@@ -124,7 +128,8 @@ public sealed class RecoveryTests(ApiFactory factory)
     [Fact]
     public async Task Register_rejects_password_without_digit()
     {
-        var http = With(factory, new CapturingEmailSender()).CreateClient();
+        await using var app = With(factory, new CapturingEmailSender());
+        using var http = app.CreateClient();
         var login = "weak" + Guid.NewGuid().ToString("N")[..8];
 
         var resp = await http.PostAsJsonAsync("/api/auth/register",
@@ -137,7 +142,8 @@ public sealed class RecoveryTests(ApiFactory factory)
     public async Task Login_requires_confirmed_email_when_enabled()
     {
         var mail = new CapturingEmailSender();
-        var http = With(factory, mail, requireConfirmed: true).CreateClient();
+        await using var app = With(factory, mail, requireConfirmed: true);
+        using var http = app.CreateClient();
         var (login, email) = await RegisterAsync(http);
 
         var before = await http.PostAsJsonAsync("/api/auth/login", new { login, password = Password });

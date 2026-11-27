@@ -15,7 +15,7 @@ namespace Messenger.Api.Controllers;
 [ApiController, Route("api/auth")]
 public sealed class AuthController(
     AppDbContext db, ITokenService tokens, IRefreshTokenService refreshTokens, LoginThrottle throttle, IOptions<JwtOptions> jwt,
-    IEmailTokenService emailTokens, IEmailSender mail, IConfiguration config, ILogger<AuthController> log) : ControllerBase
+    IEmailTokenService emailTokens, IEmailQueue mailQueue, IConfiguration config) : ControllerBase
 {
     public const string CookieName = "rt";
     // Сравнение с «пустышкой», когда пользователь не найден, — чтобы время ответа не выдавало существование логина.
@@ -26,12 +26,15 @@ public sealed class AuthController(
     {
         var email = req.Email.Trim().ToLowerInvariant();
         var login = req.Login.Trim().ToLowerInvariant();
+        var displayName = string.IsNullOrWhiteSpace(req.DisplayName) ? login : req.DisplayName.Trim();
+        if (displayName.Any(char.IsControl))
+            return Problem(statusCode: StatusCodes.Status400BadRequest, title: "displayName contains invalid characters");
         var user = new UserEntity
         {
             Login = login,
             Email = email,
             PasswordHash = BCrypt.Net.BCrypt.HashPassword(req.Password, workFactor: 11),
-            DisplayName = string.IsNullOrWhiteSpace(req.DisplayName) ? login : req.DisplayName.Trim(),
+            DisplayName = displayName,
         };
 
         db.Users.Add(user);
@@ -61,10 +64,18 @@ public sealed class AuthController(
         }
 
         var user = await db.Users.AsNoTracking().FirstOrDefaultAsync(u => u.Login == id || u.Email == id, ct);
+        // Если аккаунт существует — проверяем блокировку ещё и по user.Id, чтобы нельзя было обходить лимит, чередуя логин и email.
+        if (user is not null && throttle.IsBlocked(ip, "uid:" + user.Id, out retry))
+        {
+            Response.Headers.RetryAfter = ((int)retry.TotalSeconds + 1).ToString();
+            return Problem(statusCode: StatusCodes.Status429TooManyRequests, title: "Too many failed attempts");
+        }
+
         var passwordOk = BCrypt.Net.BCrypt.Verify(req.Password, user?.PasswordHash ?? DummyHash);
         if (user is null || !passwordOk)
         {
             throttle.Fail(ip, id);
+            if (user is not null) throttle.Fail(ip, "uid:" + user.Id);
             return Problem(statusCode: StatusCodes.Status401Unauthorized, title: "Invalid login or password");
         }
 
@@ -73,6 +84,7 @@ public sealed class AuthController(
             return Problem(statusCode: StatusCodes.Status403Forbidden, title: "Email is not confirmed");
 
         throttle.Reset(ip, id);
+        throttle.Reset(ip, "uid:" + user.Id);
         return Ok(await StartSessionAsync(user, ct));
     }
 
@@ -137,17 +149,8 @@ public sealed class AuthController(
         return $"{baseUrl.TrimEnd('/')}/{page}#token={raw}";
     }
 
-    /// <summary>Отправка в фоне: время ответа не зависит от SMTP (иначе по задержке видно, существует ли email), а сбой почты не ломает запрос.</summary>
-    private void SendMail(string to, string subject, string body)
-    {
-        var sender = mail;
-        var logger = log;
-        _ = Task.Run(async () =>
-        {
-            try { await sender.SendAsync(to, subject, body); }
-            catch (Exception ex) { logger.LogError(ex, "Не удалось отправить письмо «{Subject}»", subject); }
-        });
-    }
+    /// <summary>Постановка письма в фоновую очередь: время ответа не зависит от SMTP/Resend, а сбой почты не ломает запрос.</summary>
+    private void SendMail(string to, string subject, string body) => mailQueue.Enqueue(to, subject, body);
 
     /// <summary>
     /// Смена пароля. Все остальные сессии (refresh-токены) отзываются, текущая сохраняется.
@@ -221,7 +224,7 @@ public sealed class AuthController(
     private AuthResponse ToResponse(UserEntity user)
     {
         var (token, expires) = tokens.Create(user);
-        return new AuthResponse(token, expires, new UserDto(user.Id, user.Login, user.DisplayName, user.AvatarUrl));
+        return new AuthResponse(token, expires, user.ToUserDto());
     }
 
     private CookieOptions CookieOpts(TimeSpan? maxAge)

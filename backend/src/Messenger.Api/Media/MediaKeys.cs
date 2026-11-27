@@ -33,8 +33,7 @@ public static class MediaKeys
     {
         try
         {
-            foreach (var key in await storage.ListAsync($"media/{dialogId}/", 1000))
-                await storage.DeleteAsync(key);
+            await storage.DeletePrefixAsync($"media/{dialogId}/");
         }
         catch (Exception ex) { log.LogWarning(ex, "Could not clean up media of dialog {DialogId}", dialogId); }
     }

@@ -15,6 +15,7 @@ public interface ITokenService
 public sealed class TokenService(IOptions<JwtOptions> options) : ITokenService
 {
     private readonly JwtOptions _o = options.Value;
+    private readonly SigningCredentials _creds = new(CreateKey(options.Value.Key), SecurityAlgorithms.HmacSha256);
 
     public static SymmetricSecurityKey CreateKey(string key) => new(Encoding.UTF8.GetBytes(key));
 
@@ -25,14 +26,14 @@ public sealed class TokenService(IOptions<JwtOptions> options) : ITokenService
         var token = new JwtSecurityToken(
             issuer: _o.Issuer,
             audience: _o.Audience,
-            claims: new[]
-            {
+            claims:
+            [
                 new Claim(JwtRegisteredClaimNames.Sub, user.Id),
                 new Claim("login", user.Login),
-            },
+            ],
             notBefore: now,
             expires: expires,
-            signingCredentials: new SigningCredentials(CreateKey(_o.Key), SecurityAlgorithms.HmacSha256));
+            signingCredentials: _creds);
         return (new JwtSecurityTokenHandler().WriteToken(token), expires);
     }
 }

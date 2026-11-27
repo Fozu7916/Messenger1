@@ -72,6 +72,7 @@ public sealed class HardeningTests(ApiFactory factory)
         Assert.Equal("nosniff", resp.Headers.GetValues("X-Content-Type-Options").Single());
         Assert.Equal("DENY", resp.Headers.GetValues("X-Frame-Options").Single());
         Assert.Contains("default-src 'self'", resp.Headers.GetValues("Content-Security-Policy").Single());
+        Assert.Contains("microphone=(self)", resp.Headers.GetValues("Permissions-Policy").Single());
     }
 
     [Fact]

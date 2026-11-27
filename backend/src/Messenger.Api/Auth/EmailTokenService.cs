@@ -22,10 +22,18 @@ public interface IEmailTokenService
 
 public sealed class EmailTokenService(AppDbContext db, IConfiguration config) : IEmailTokenService
 {
-    private TimeSpan Ttl(string purpose) => purpose == EmailTokenPurpose.Reset
-        ? TimeSpan.FromMinutes(config.GetValue("Auth:ResetTokenMinutes", 30))
-        : TimeSpan.FromHours(config.GetValue("Auth:ConfirmTokenHours", 24));
+    private TimeSpan Ttl(string purpose)
+    {
+        if (purpose == EmailTokenPurpose.Reset)
+        {
+            var minutes = config.GetValue("Auth:ResetTokenMinutes", 30);
+            return TimeSpan.FromMinutes(minutes);
+        }
 
+        var hours = config.GetValue("Auth:ConfirmTokenHours", 24);
+        return TimeSpan.FromHours(hours);
+    }
+    
     public async Task<string?> IssueAsync(string userId, string purpose, CancellationToken ct)
     {
         var now = DateTime.UtcNow;

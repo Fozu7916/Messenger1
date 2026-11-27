@@ -1,15 +1,15 @@
 using Messenger.Api.Data;
-using Microsoft.EntityFrameworkCore;
+using Messenger.Api.Domain;
 using Messenger.Api.Messages;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.SignalR;
+using Microsoft.EntityFrameworkCore;
 
 namespace Messenger.Api.Hubs;
 
 /// <summary>
 /// Клиент → сервер: SendMessage, SendReply, Typing, MarkRead, GetOnlineContacts.
 /// Сервер → клиент: MessageReceived, MessageAcked, MessageDeleted, MessageEdited, MessagePinned, MessageUnpinned, MessagesRead, UserTyping, PresenceChanged.
-/// Рассылка идёт через Clients.Users(...) — работает между инстансами благодаря Redis backplane.
 /// </summary>
 [Authorize]
 public sealed class ChatHub(IMessageRepository messages, IDialogAccess dialogs, IPresenceTracker presence, AppDbContext db, HubRateLimiter limits) : Hub
@@ -92,9 +92,9 @@ public sealed class ChatHub(IMessageRepository messages, IDialogAccess dialogs, 
             MediaUrl: null,
             ReplyToId: replyToId));
 
-        await Clients.Caller.SendAsync("MessageAcked", clientMessageId, result.Message.Id);
+        await Clients.Caller.SendAsync(HubEvents.MessageAcked, clientMessageId, result.Message.Id);
         if (result.IsNew)
-            await Clients.Users(members).SendAsync("MessageReceived", result.Message);
+            await Clients.Users(members).SendAsync(HubEvents.MessageReceived, result.Message);
 
         return result.Message.Id;
     }
@@ -107,7 +107,7 @@ public sealed class ChatHub(IMessageRepository messages, IDialogAccess dialogs, 
             throw new HubException("forbidden");
 
         var others = members.Where(id => id != UserId).ToList();
-        await Clients.Users(others).SendAsync("UserTyping", dialogId, UserId);
+        await Clients.Users(others).SendAsync(HubEvents.UserTyping, dialogId, UserId);
     }
 
     /// <summary>
@@ -125,7 +125,7 @@ public sealed class ChatHub(IMessageRepository messages, IDialogAccess dialogs, 
 
         var readUpTo = await messages.MarkReadAsync(dialogId!, UserId, upToId);
         if (readUpTo is not null)
-            await Clients.Users(members).SendAsync("MessagesRead", dialogId, UserId, readUpTo);
+            await Clients.Users(members).SendAsync(HubEvents.MessagesRead, dialogId, UserId, readUpTo);
     }
 
     /// <summary>Кто из собеседников сейчас онлайн. Клиент вызывает при (пере)подключении, чтобы не ждать событий PresenceChanged.</summary>
@@ -150,6 +150,6 @@ public sealed class ChatHub(IMessageRepository messages, IDialogAccess dialogs, 
     {
         var contacts = await dialogs.GetContactIdsAsync(userId);
         if (contacts.Count > 0)
-            await Clients.Users(contacts).SendAsync("PresenceChanged", userId, status, lastSeen);
+            await Clients.Users(contacts).SendAsync(HubEvents.PresenceChanged, userId, status, lastSeen);
     }
 }

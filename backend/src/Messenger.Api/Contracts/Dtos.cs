@@ -1,3 +1,5 @@
+using Messenger.Api.Domain;
+
 namespace Messenger.Api.Contracts;
 
 public sealed record UserDto(string Id, string Login, string DisplayName, string? AvatarUrl);
@@ -16,7 +18,7 @@ public sealed record MessageDto(
     string? ReplyToId = null,
     string? ForwardedFromId = null,
     string? ForwardedFromName = null,
-    string Kind = "text",
+    string Kind = MessageKind.Text,
     int? MediaWidth = null,
     int? MediaHeight = null,
     int? MediaDurationMs = null);
@@ -45,9 +47,22 @@ public sealed record DialogDto(
     MessageDto? LastMessage,
     int UnreadCount = 0,
     string? PeerLastReadId = null,
-    string Kind = "direct",
+    string Kind = DialogKind.Direct,
     string? Title = null,
     int MemberCount = 2,
-    string MyRole = "member");
+    string MyRole = MemberRole.Member);
 
 public sealed record MemberDto(UserDto User, string Role);
+
+public static class DtoMappings
+{
+    public static UserDto ToUserDto(this User u) =>
+        new(u.Id, u.Login, u.DisplayName, u.AvatarUrl);
+
+    public static ProfileDto ToProfileDto(this User u, bool? isOnline = null, DateTime? lastSeenAt = null) =>
+        new(u.Id, u.Login, u.DisplayName, u.AvatarUrl, u.Bio, u.CreatedAt, isOnline, lastSeenAt);
+
+    public static MessageDto ToDto(this Message m) =>
+        new(m.Id, m.ClientMessageId, m.DialogId, m.SenderId, m.Text, m.MediaUrl, m.CreatedAt, m.EditedAt,
+            m.ReplyToId, m.ForwardedFromId, m.ForwardedFromName, m.Kind, m.MediaWidth, m.MediaHeight, m.MediaDurationMs);
+}

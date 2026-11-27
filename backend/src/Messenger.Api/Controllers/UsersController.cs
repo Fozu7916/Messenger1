@@ -29,6 +29,9 @@ public sealed class UsersController(AppDbContext db, IPresenceTracker presence) 
     [HttpPut("me")]
     public async Task<ActionResult<ProfileDto>> UpdateMe(UpdateProfileRequest req, CancellationToken ct)
     {
+        var displayName = req.DisplayName.Trim();
+        if (displayName.Length == 0 || displayName.Any(char.IsControl))
+            return Problem(statusCode: StatusCodes.Status400BadRequest, title: "displayName contains invalid characters");
         string? bio = null;
         var bioGiven = req.Bio is not null;
         if (bioGiven)
@@ -47,11 +50,11 @@ public sealed class UsersController(AppDbContext db, IPresenceTracker presence) 
         if (req.AvatarUrl is not null && req.AvatarUrl == user.AvatarUrl) avatar = user.AvatarUrl;
         else if (!AvatarUrl.TryNormalize(req.AvatarUrl, out avatar))
             return Problem(statusCode: StatusCodes.Status400BadRequest, title: "avatarUrl must be a public https URL");
-        user.DisplayName = req.DisplayName.Trim();
+        user.DisplayName = displayName;
         user.AvatarUrl = avatar;
         if (bioGiven) user.Bio = bio;
         await db.SaveChangesAsync(ct);
-        return new ProfileDto(user.Id, user.Login, user.DisplayName, user.AvatarUrl, user.Bio, user.CreatedAt);
+        return user.ToProfileDto();
     }
 
     /// <summary>Настройки оформления (тема, акцент, обои…): JSON-объект до 4 КБ, формат определяет клиент. Пусто — {}.</summary>

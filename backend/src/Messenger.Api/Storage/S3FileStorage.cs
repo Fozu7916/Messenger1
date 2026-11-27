@@ -65,6 +65,34 @@ public sealed class S3FileStorage : IFileStorage, IDisposable
         var r = await _s3.ListObjectsV2Async(new ListObjectsV2Request { BucketName = _o.Bucket, Prefix = prefix, MaxKeys = max }, ct);
         return (r.S3Objects ?? []).Select(o => o.Key).ToList();
     }
+    public async Task DeletePrefixAsync(string prefix, CancellationToken ct = default)
+    {
+        string? token = null;
+        do
+        {
+            var list = await _s3.ListObjectsV2Async(new ListObjectsV2Request
+            {
+                BucketName = _o.Bucket,
+                Prefix = prefix,
+                MaxKeys = 1000,
+                ContinuationToken = token,
+            }, ct);
+
+            var keys = (list.S3Objects ?? []).Select(o => new KeyVersion { Key = o.Key }).ToList();
+            if (keys.Count > 0)
+            {
+                await _s3.DeleteObjectsAsync(new DeleteObjectsRequest
+                {
+                    BucketName = _o.Bucket,
+                    Objects = keys,
+                    Quiet = true,
+                }, ct);
+            }
+
+            token = list.IsTruncated == true ? list.NextContinuationToken : null;
+        }
+        while (token is not null);
+    }
 
     /// <summary>Проверка доступа к бакету при старте (и создание бакета, если EnsureBucket включён).</summary>
     public async Task EnsureReadyAsync(CancellationToken ct)

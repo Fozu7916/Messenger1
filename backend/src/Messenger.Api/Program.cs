@@ -12,7 +12,6 @@ using Microsoft.AspNetCore.SignalR;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
 using Npgsql;
-using StackExchange.Redis;
 
 var builder = WebApplication.CreateBuilder(args);
 var config = builder.Configuration;
@@ -49,6 +48,9 @@ else if (!string.IsNullOrWhiteSpace(config["Smtp:Host"]))
     builder.Services.AddSingleton<IEmailSender, SmtpEmailSender>();
 else
     builder.Services.AddSingleton<IEmailSender, LogEmailSender>();
+builder.Services.AddSingleton<EmailQueue>();
+builder.Services.AddSingleton<IEmailQueue>(sp => sp.GetRequiredService<EmailQueue>());
+builder.Services.AddHostedService<EmailQueueWorker>();
 builder.Services.AddHostedService<RefreshTokenCleanup>();
 builder.Services.AddSingleton<HubRateLimiter>();
 builder.Services.AddSingleton<IUserIdProvider, SubClaimUserIdProvider>();
@@ -126,28 +128,10 @@ builder.Services.AddRateLimiter(o =>
         _ => new FixedWindowRateLimiterOptions { PermitLimit = mailPer15Min, Window = TimeSpan.FromMinutes(15) }));
 });
 
-// ---------- SignalR (+ Redis backplane, если задан) ----------
-var signalR = builder.Services.AddSignalR();
-var redis = config.GetConnectionString("Redis");
-if (!string.IsNullOrWhiteSpace(redis))
-    signalR.AddStackExchangeRedis(redis, o => o.Configuration.ChannelPrefix = RedisChannel.Literal("messenger"));
-if (!string.IsNullOrWhiteSpace(redis))
-{
-    // Присутствие в Redis: корректно работает при нескольких инстансах.
-    builder.Services.AddSingleton<IConnectionMultiplexer>(_ =>
-    {
-        var opts = ConfigurationOptions.Parse(redis);
-        opts.AbortOnConnectFail = false;
-        return ConnectionMultiplexer.Connect(opts);
-    });
-    builder.Services.AddSingleton<RedisPresenceTracker>();
-    builder.Services.AddSingleton<IPresenceTracker>(sp => sp.GetRequiredService<RedisPresenceTracker>());
-    builder.Services.AddHostedService(sp => sp.GetRequiredService<RedisPresenceTracker>());
-}
-else
-{
-    builder.Services.AddSingleton<IPresenceTracker, InMemoryPresenceTracker>();
-}
+
+// ---------- SignalR ----------
+builder.Services.AddSignalR();
+builder.Services.AddSingleton<IPresenceTracker, InMemoryPresenceTracker>();
 
 // ---------- Web ----------
 var origins = config.GetSection("Cors:Origins").Get<string[]>() ?? [];
@@ -169,7 +153,7 @@ app.Use(async (ctx, next) =>
     h["X-Content-Type-Options"] = "nosniff";
     h["X-Frame-Options"] = "DENY";
     h["Referrer-Policy"] = "no-referrer";
-    h["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()";
+    h["Permissions-Policy"] = "camera=(), microphone=(self), geolocation=()";
     // img-src https: — аватары по внешним ссылкам; connect-src — свой origin и wss плюс Csp:ConnectSrc (если API на другом домене).
     h["Content-Security-Policy"] = "default-src 'self'; img-src 'self' https: data: blob:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; " +
     "font-src 'self' https://fonts.gstatic.com; script-src 'self'; connect-src " + connectSrc + "; frame-ancestors 'none'; base-uri 'self'; object-src 'none'";

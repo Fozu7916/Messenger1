@@ -162,12 +162,17 @@ public sealed class MessageRepository(NpgsqlDataSource dataSource) : IMessageRep
 
     public async Task<IReadOnlyList<MessageDto>> GetPinnedAsync(string dialogId, string userId, CancellationToken ct = default)
     {
-        var sql = $"""
-            SELECT {Columns} FROM messages
-            WHERE dialog_id = @dialogId AND deleted_at IS NULL
-              AND id IN (SELECT message_id FROM pinned_messages WHERE dialog_id = @dialogId)
-              AND NOT EXISTS (SELECT 1 FROM message_hides h WHERE h.message_id = messages.id AND h.user_id = @userId)
-            ORDER BY (SELECT p.pinned_at FROM pinned_messages p WHERE p.message_id = messages.id) DESC;
+        const string sql = """
+            SELECT m.id AS Id, m.client_message_id AS ClientMessageId, m.dialog_id AS DialogId, m.sender_id AS SenderId,
+                   m.text AS Text, m.media_url AS MediaUrl, m.created_at AS CreatedAt, m.edited_at AS EditedAt,
+                   m.reply_to_id AS ReplyToId, m.forwarded_from_id AS ForwardedFromId, m.forwarded_from_name AS ForwardedFromName,
+                   m.kind AS Kind, m.media_width AS MediaWidth, m.media_height AS MediaHeight, m.media_duration_ms AS MediaDurationMs
+            FROM pinned_messages p
+            JOIN messages m ON m.id = p.message_id
+            WHERE p.dialog_id = @dialogId
+              AND m.deleted_at IS NULL
+              AND NOT EXISTS (SELECT 1 FROM message_hides h WHERE h.message_id = m.id AND h.user_id = @userId)
+            ORDER BY p.pinned_at DESC;
             """;
         await using var conn = await dataSource.OpenConnectionAsync(ct);
         return (await conn.QueryAsync<MessageDto>(

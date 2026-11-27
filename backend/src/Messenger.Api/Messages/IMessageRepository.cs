@@ -1,4 +1,5 @@
 using Messenger.Api.Contracts;
+using Messenger.Api.Domain;
 
 namespace Messenger.Api.Messages;
 
@@ -12,7 +13,7 @@ public sealed record NewMessage(
     string? ReplyToId = null,
     string? ForwardedFromId = null,
     string? ForwardedFromName = null,
-    string Kind = "text",
+    string Kind = MessageKind.Text,
     int? MediaWidth = null,
     int? MediaHeight = null,
     int? MediaDurationMs = null);

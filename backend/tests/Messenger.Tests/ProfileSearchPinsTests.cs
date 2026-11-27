@@ -106,10 +106,9 @@ public sealed class ProfileSearchPinsTests(ApiFactory factory)
         var history = await alice.Http.GetFromJsonAsync<List<MessageDto>>($"/api/dialogs/{ab.Id}/messages");
         Assert.Equal(original, history!.Single(m => m.Id == reply).ReplyToId);
 
-        // ответ на сообщение из другого диалога запрещён
-        // var ex = await Assert.ThrowsAsync<HubException>(() =>
-        //     hub.InvokeAsync<string>("SendReply", Guid.NewGuid().ToString(), ac.Id, "x", original));
-        // Assert.Contains("invalid_reply_to", ex.Message);
+        var ex = await Assert.ThrowsAsync<Microsoft.AspNetCore.SignalR.HubException>(() =>
+            hub.InvokeAsync<string>("SendReply", Guid.NewGuid().ToString(), ac.Id, "x", original));
+        Assert.Contains("invalid_reply_to", ex.Message);
     }
 
     [Fact]

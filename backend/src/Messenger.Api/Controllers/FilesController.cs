@@ -1,6 +1,7 @@
 using Messenger.Api.Auth;
 using Messenger.Api.Contracts;
 using Messenger.Api.Data;
+using Messenger.Api.Domain;
 using Messenger.Api.Hubs;
 using Messenger.Api.Media;
 using Messenger.Api.Messages;
@@ -45,7 +46,7 @@ public sealed class FilesController(AppDbContext db, IFileStorage storage, IDial
         user.AvatarUrl = FilesPrefix + key;
         await db.SaveChangesAsync(ct);
         await DeleteOwnAvatarAsync(me, old);
-        return Profile(user);
+        return user.ToProfileDto();
     }
 
     [HttpDelete("api/users/me/avatar")]
@@ -58,7 +59,7 @@ public sealed class FilesController(AppDbContext db, IFileStorage storage, IDial
         user.AvatarUrl = null;
         await db.SaveChangesAsync(ct);
         await DeleteOwnAvatarAsync(me, old);
-        return Profile(user);
+        return user.ToProfileDto();
     }
 
     /// <summary>Публичная отдача аватара: ключ неизменяем, поэтому кэш на год.</summary>
@@ -169,14 +170,14 @@ public sealed class FilesController(AppDbContext db, IFileStorage storage, IDial
 
     // ---------------- Общее ----------------
 
-    private async Task<Domain.Dialog?> GroupAsync(string dialogId, CancellationToken ct)
+    private async Task<Dialog?> GroupAsync(string dialogId, CancellationToken ct)
     {
         var me = User.GetUserId();
-        return await db.Dialogs.FirstOrDefaultAsync(d => d.Id == dialogId && d.Kind == "group" && d.Members.Any(m => m.UserId == me), ct);
+        return await db.Dialogs.FirstOrDefaultAsync(d => d.Id == dialogId && d.Kind == DialogKind.Group && d.Members.Any(m => m.UserId == me), ct);
     }
 
     private async Task NotifyAsync(string dialogId, CancellationToken ct) =>
-        await hub.Clients.Users(await access.GetMemberIdsAsync(dialogId, ct)).SendAsync("DialogsChanged", ct);
+        await hub.Clients.Users(await access.GetMemberIdsAsync(dialogId, ct)).SendAsync(HubEvents.DialogsChanged, ct);
 
     private async Task DeleteGroupAvatarFileAsync(string dialogId, string? url)
     {
@@ -187,9 +188,7 @@ public sealed class FilesController(AppDbContext db, IFileStorage storage, IDial
         catch (Exception ex) { log.LogWarning(ex, "Could not delete old group avatar {Key}", key); }
     }
 
-    private static bool IsUlid(string s) => s.Length == 26 && s.All(char.IsAsciiLetterOrDigit);
-
-    private static ProfileDto Profile(Domain.User u) => new(u.Id, u.Login, u.DisplayName, u.AvatarUrl, u.Bio, u.CreatedAt);
+    private static bool IsUlid(string s) => Ulid.TryParse(s, out _);
 
     private ObjectResult Unavailable() => Problem(statusCode: StatusCodes.Status503ServiceUnavailable, title: "File storage is not available");
 

@@ -1,73 +1,113 @@
+using Dapper;
 using Messenger.Api.Auth;
 using Messenger.Api.Contracts;
 using Messenger.Api.Data;
 using Messenger.Api.Domain;
+using Messenger.Api.Hubs;
+using Messenger.Api.Media;
 using Messenger.Api.Messages;
+using Messenger.Api.Storage;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.RateLimiting;
-using Messenger.Api.Hubs;
-using Messenger.Api.Media;
-using Messenger.Api.Storage;
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.EntityFrameworkCore;
+using Npgsql;
 
 namespace Messenger.Api.Controllers;
 
 [ApiController, Route("api/dialogs"), Authorize, EnableRateLimiting("users")]
-public sealed class DialogsController(AppDbContext db, IMessageRepository messages, IDialogAccess access, IFileStorage storage,
-    IHubContext<ChatHub> hub, ILogger<DialogsController> log) : ControllerBase
+public sealed class DialogsController(
+    AppDbContext db,
+    NpgsqlDataSource dataSource,
+    IMessageRepository messages,
+    IDialogAccess access,
+    IFileStorage storage,
+    IHubContext<ChatHub> hub,
+    ILogger<DialogsController> log) : ControllerBase
 {
+    private const string ListSql = """
+        SELECT
+            d.id AS Id,
+            d.created_at AS CreatedAt,
+            d.kind AS Kind,
+            d.title AS Title,
+            d.avatar_url AS DialogAvatarUrl,
+            (SELECT COUNT(*) FROM dialog_members dm_cnt WHERE dm_cnt.dialog_id = d.id) AS MemberCount,
+            me_m.role AS MyRole,
+            peer_u.id AS PeerId,
+            peer_u.login AS PeerLogin,
+            peer_u.display_name AS PeerDisplayName,
+            peer_u.avatar_url AS PeerAvatarUrl,
+            peer_m.last_read_id AS PeerLastReadId,
+            lm.id AS LastId,
+            lm.client_message_id AS LastClientMessageId,
+            lm.sender_id AS LastSenderId,
+            lm.text AS LastText,
+            lm.media_url AS LastMediaUrl,
+            lm.created_at AS LastCreatedAt,
+            lm.edited_at AS LastEditedAt,
+            lm.reply_to_id AS LastReplyToId,
+            lm.forwarded_from_id AS LastForwardedFromId,
+            lm.forwarded_from_name AS LastForwardedFromName,
+            lm.kind AS LastKind,
+            lm.media_width AS LastMediaWidth,
+            lm.media_height AS LastMediaHeight,
+            lm.media_duration_ms AS LastMediaDurationMs
+        FROM dialog_members me_m
+        JOIN dialogs d ON d.id = me_m.dialog_id
+        LEFT JOIN LATERAL (
+            SELECT dm.user_id, dm.last_read_id
+            FROM dialog_members dm
+            WHERE dm.dialog_id = d.id AND dm.user_id <> @me
+            LIMIT 1
+        ) peer_m ON d.kind = 'direct'
+        LEFT JOIN users peer_u ON peer_u.id = peer_m.user_id
+        LEFT JOIN LATERAL (
+            SELECT m.*
+            FROM messages m
+            WHERE m.dialog_id = d.id
+              AND m.deleted_at IS NULL
+              AND NOT EXISTS (SELECT 1 FROM message_hides h WHERE h.message_id = m.id AND h.user_id = @me)
+            ORDER BY m.id DESC
+            LIMIT 1
+        ) lm ON true
+        WHERE me_m.user_id = @me
+        ORDER BY COALESCE(lm.created_at, d.created_at) DESC, d.id ASC
+        LIMIT @limit OFFSET @offset;
+        """;
+
     [HttpGet]
     public async Task<ActionResult<List<DialogDto>>> List([FromQuery] int limit = 100, [FromQuery] int offset = 0, CancellationToken ct = default)
     {
         var me = User.GetUserId();
-        // Ответ ограничен: за один запрос нельзя выгрузить все диалоги. Порядок — по последней активности, как в интерфейсе.
         limit = Math.Clamp(limit, 1, 200);
         offset = Math.Max(0, offset);
 
-        var rows = await db.Dialogs.AsNoTracking()
-            .Where(d => d.Members.Any(m => m.UserId == me))
-            .OrderByDescending(d => d.Messages.Where(m => m.DeletedAt == null).Max(m => (DateTime?)m.CreatedAt) ?? d.CreatedAt)
-            .ThenBy(d => d.Id)
-            .Skip(offset).Take(limit)
-            .Select(d => new
-            {
-                d.Id,
-                d.CreatedAt,
-                d.Kind,
-                d.Title,
-                d.AvatarUrl,
-                MemberCount = d.Members.Count,
-                MyRole = d.Members.Where(m => m.UserId == me).Select(m => m.Role).FirstOrDefault(),
-                Peer = d.Members.Where(m => m.UserId != me)
-                    .Select(m => new { m.User.Id, m.User.Login, m.User.DisplayName, m.User.AvatarUrl })
-                    .FirstOrDefault(),
-                PeerRead = d.Members.Where(m => m.UserId != me).Select(m => m.LastReadId).FirstOrDefault(),
-                Last = d.Messages.Where(m => m.DeletedAt == null && !db.MessageHides.Any(h => h.MessageId == m.Id && h.UserId == me))
-                    .OrderByDescending(m => m.Id)
-                    .Select(m => new { m.Id, m.ClientMessageId, m.DialogId, m.SenderId, m.Text, m.MediaUrl, m.CreatedAt, m.EditedAt, m.ReplyToId, m.ForwardedFromId, m.ForwardedFromName, m.Kind, m.MediaWidth, m.MediaHeight, m.MediaDurationMs })
-                    .FirstOrDefault(),
-            })
-            .ToListAsync(ct);
+        await using var conn = await dataSource.OpenConnectionAsync(ct);
+        var rows = (await conn.QueryAsync<DialogListRow>(
+            new CommandDefinition(ListSql, new { me, limit, offset }, cancellationToken: ct))).ToList();
 
         var unread = await messages.GetUnreadCountsAsync(me, ct);
 
-        return rows
-            .Select(r => new DialogDto(
-                r.Id,
-                r.CreatedAt,
-                // у беседы «собеседник» синтетический (id = id беседы, имя = название): так весь интерфейс показывает название и аватар без особых случаев
-                r.Kind == "group" ? new UserDto(r.Id, "", r.Title ?? "Беседа", r.AvatarUrl)
-                    : r.Peer is null ? null : new UserDto(r.Peer.Id, r.Peer.Login, r.Peer.DisplayName, r.Peer.AvatarUrl),
-                r.Last is null ? null : new MessageDto(r.Last.Id, r.Last.ClientMessageId, r.Last.DialogId,
-                    r.Last.SenderId, r.Last.Text, r.Last.MediaUrl, r.Last.CreatedAt, r.Last.EditedAt,
-                    r.Last.ReplyToId, r.Last.ForwardedFromId, r.Last.ForwardedFromName, r.Last.Kind, r.Last.MediaWidth, r.Last.MediaHeight, r.Last.MediaDurationMs),
-                unread.TryGetValue(r.Id, out var n) ? n : 0,
-                r.Kind == "group" ? null : r.PeerRead,
-                r.Kind, r.Title, r.MemberCount, r.MyRole ?? "member"))
-            .OrderByDescending(d => d.LastMessage?.CreatedAt ?? d.CreatedAt)
-            .ToList();
+        return rows.Select(r => new DialogDto(
+            r.Id,
+            r.CreatedAt,
+            r.Kind == DialogKind.Group
+                ? new UserDto(r.Id, "", r.Title ?? "Беседа", r.DialogAvatarUrl)
+                : r.PeerId is null ? null : new UserDto(r.PeerId, r.PeerLogin!, r.PeerDisplayName!, r.PeerAvatarUrl),
+            r.LastId is null
+                ? null
+                : new MessageDto(
+                    r.LastId, r.LastClientMessageId!, r.Id, r.LastSenderId!, r.LastText!, r.LastMediaUrl,
+                    r.LastCreatedAt!.Value, r.LastEditedAt, r.LastReplyToId, r.LastForwardedFromId,
+                    r.LastForwardedFromName, r.LastKind ?? MessageKind.Text, r.LastMediaWidth, r.LastMediaHeight, r.LastMediaDurationMs),
+            unread.TryGetValue(r.Id, out var n) ? n : 0,
+            r.Kind == DialogKind.Group ? null : r.PeerLastReadId,
+            r.Kind,
+            r.Title,
+            (int)r.MemberCount,
+            r.MyRole ?? MemberRole.Member)).ToList();
     }
 
     /// <summary>
@@ -87,7 +127,7 @@ public sealed class DialogsController(AppDbContext db, IMessageRepository messag
         if (peer is null) return NotFound();
 
         var existing = await db.Dialogs.AsNoTracking()
-            .Where(d => d.Kind == "direct" && d.Members.Any(m => m.UserId == me) && d.Members.Any(m => m.UserId == req.UserId))
+            .Where(d => d.Kind == DialogKind.Direct && d.Members.Any(m => m.UserId == me) && d.Members.Any(m => m.UserId == req.UserId))
             .FirstOrDefaultAsync(ct);
         if (existing is not null)
             return Ok(new DialogDto(existing.Id, existing.CreatedAt, peer, null));
@@ -109,7 +149,7 @@ public sealed class DialogsController(AppDbContext db, IMessageRepository messag
         {
             await db.SaveChangesAsync(ct);
         }
-        catch (DbUpdateException ex) when (ex.InnerException is Npgsql.PostgresException { SqlState: Npgsql.PostgresErrorCodes.UniqueViolation })
+        catch (DbUpdateException ex) when (ex.InnerException is PostgresException { SqlState: PostgresErrorCodes.UniqueViolation })
         {
             // Параллельный запрос уже создал диалог этой пары — возвращаем его.
             db.ChangeTracker.Clear();
@@ -129,12 +169,42 @@ public sealed class DialogsController(AppDbContext db, IMessageRepository messag
             .Select(d => new { d.Kind, Role = d.Members.Where(m => m.UserId == me).Select(m => m.Role).First() })
             .FirstOrDefaultAsync(ct);
         if (info is null) return NotFound();
-        if (info.Kind == "group" && info.Role != "owner")
+        if (info.Kind == DialogKind.Group && info.Role != MemberRole.Owner)
             return Problem(statusCode: StatusCodes.Status403Forbidden, title: "Only the owner can delete a group; leave it instead");
         var members = await access.GetMemberIdsAsync(id, ct);
         await db.Dialogs.Where(d => d.Id == id).ExecuteDeleteAsync(ct);
         await storage.DeleteDialogMediaAsync(id, log);
-        await hub.Clients.Users(members).SendAsync("DialogsChanged", ct);   // у остальных диалог исчезает сразу, а не при следующей синхронизации
+        await hub.Clients.Users(members).SendAsync(HubEvents.DialogsChanged, ct);
         return NoContent();
+    }
+
+    private sealed class DialogListRow
+    {
+        public string Id { get; init; } = "";
+        public DateTime CreatedAt { get; init; }
+        public string Kind { get; init; } = DialogKind.Direct;
+        public string? Title { get; init; }
+        public string? DialogAvatarUrl { get; init; }
+        public long MemberCount { get; init; }
+        public string? MyRole { get; init; }
+        public string? PeerId { get; init; }
+        public string? PeerLogin { get; init; }
+        public string? PeerDisplayName { get; init; }
+        public string? PeerAvatarUrl { get; init; }
+        public string? PeerLastReadId { get; init; }
+        public string? LastId { get; init; }
+        public string? LastClientMessageId { get; init; }
+        public string? LastSenderId { get; init; }
+        public string? LastText { get; init; }
+        public string? LastMediaUrl { get; init; }
+        public DateTime? LastCreatedAt { get; init; }
+        public DateTime? LastEditedAt { get; init; }
+        public string? LastReplyToId { get; init; }
+        public string? LastForwardedFromId { get; init; }
+        public string? LastForwardedFromName { get; init; }
+        public string? LastKind { get; init; }
+        public int? LastMediaWidth { get; init; }
+        public int? LastMediaHeight { get; init; }
+        public int? LastMediaDurationMs { get; init; }
     }
 }

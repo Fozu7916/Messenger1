@@ -32,6 +32,13 @@ public sealed class InMemoryFileStorage : IFileStorage
     public Task<IReadOnlyList<string>> ListAsync(string prefix, int max, CancellationToken ct = default) =>
         Task.FromResult<IReadOnlyList<string>>(_files.Keys.Where(k => k.StartsWith(prefix, StringComparison.Ordinal)).OrderBy(k => k).Take(max).ToList());
 
+    public Task DeletePrefixAsync(string prefix, CancellationToken ct = default)
+    {
+        foreach (var k in _files.Keys.Where(k => k.StartsWith(prefix, StringComparison.Ordinal)).ToList())
+            _files.TryRemove(k, out _);
+        return Task.CompletedTask;
+    }
+
     private sealed class File(byte[] data, string contentType, string key) : IStoredFile
     {
         public Stream Content { get; } = new MemoryStream(data);

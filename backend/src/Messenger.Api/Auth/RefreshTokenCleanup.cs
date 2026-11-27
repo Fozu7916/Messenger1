@@ -3,7 +3,7 @@ using Microsoft.EntityFrameworkCore;
 
 namespace Messenger.Api.Auth;
 
-/// <summary>Раз в час удаляет refresh-токены, просроченные более суток назад (раньше это делалось на каждом логине).</summary>
+/// <summary>Раз в час удаляет refresh-токены, просроченные более суток назад.</summary>
 public sealed class RefreshTokenCleanup(IServiceScopeFactory scopes, ILogger<RefreshTokenCleanup> log) : BackgroundService
 {
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)

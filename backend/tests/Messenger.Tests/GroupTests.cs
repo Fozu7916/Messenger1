@@ -131,4 +131,31 @@ public sealed class GroupTests(ApiFactory factory)
         Assert.Equal(HttpStatusCode.BadRequest, (await alice.Http.PostAsJsonAsync("/api/dialogs/group", new { title = "x", memberIds = new[] { "01ARZ3NDEKTSV4RRFFQ69G5FAV" } })).StatusCode);
         Assert.Equal(HttpStatusCode.BadRequest, (await alice.Http.PostAsJsonAsync("/api/dialogs/group", new { title = "", memberIds = new[] { bob.User.Id } })).StatusCode);
     }
+    [Fact]
+    public async Task In_group_only_sender_or_owner_can_delete_message_for_everyone()
+    {
+        var alice = await factory.RegisterAsync("alice");
+        var bob = await factory.RegisterAsync("bob");
+        var carol = await factory.RegisterAsync("carol");
+        var g = await CreateGroupAsync(alice, "Права", bob, carol);
+
+        await using var bobHub = factory.ConnectHub(bob.Token);
+        await bobHub.StartAsync();
+        var bobMsgId = await bobHub.InvokeAsync<string>("SendMessage", Guid.NewGuid().ToString(), g.Id, "сообщение боба");
+
+        var history = await alice.Http.GetFromJsonAsync<List<MessageDto>>($"/api/dialogs/{g.Id}/messages");
+        var sysMsgId = history!.First(m => m.Kind == "system").Id;
+
+        // Обычный участник (carol) не может удалить чужое сообщение и служебное сообщение у всех
+        Assert.Equal(HttpStatusCode.Forbidden, (await carol.Http.DeleteAsync($"/api/messages/{bobMsgId}?scope=all")).StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, (await carol.Http.DeleteAsync($"/api/messages/{sysMsgId}?scope=all")).StatusCode);
+        // Даже владелец не может удалить служебное сообщение у всех
+        Assert.Equal(HttpStatusCode.Forbidden, (await alice.Http.DeleteAsync($"/api/messages/{sysMsgId}?scope=all")).StatusCode);
+
+        // Скрыть у себя (scope=me) обычный участник может
+        Assert.Equal(HttpStatusCode.NoContent, (await carol.Http.DeleteAsync($"/api/messages/{bobMsgId}?scope=me")).StatusCode);
+
+        // Владелец (alice) может удалить чужое сообщение у всех
+        Assert.Equal(HttpStatusCode.NoContent, (await alice.Http.DeleteAsync($"/api/messages/{bobMsgId}?scope=all")).StatusCode);
+    }
 }

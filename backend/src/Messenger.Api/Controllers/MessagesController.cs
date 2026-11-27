@@ -1,6 +1,7 @@
 using Messenger.Api.Auth;
 using Messenger.Api.Contracts;
 using Messenger.Api.Data;
+using Messenger.Api.Domain;
 using Messenger.Api.Hubs;
 using Messenger.Api.Media;
 using Messenger.Api.Messages;
@@ -85,7 +86,7 @@ public sealed class MessagesController(
             return Problem(statusCode: StatusCodes.Status400BadRequest, title: "text must be 1–4000 characters");
 
         var me = User.GetUserId();
-        var msg = await db.Messages.FirstOrDefaultAsync(m => m.Id == id && m.SenderId == me && m.DeletedAt == null, ct);
+        var msg = await db.Messages.FirstOrDefaultAsync(m => m.Id == id && m.SenderId == me && m.DeletedAt == null && m.Kind != MessageKind.System, ct);
         if (msg is null) return NotFound();
 
         var changed = msg.Text != text;
@@ -96,19 +97,18 @@ public sealed class MessagesController(
             await db.SaveChangesAsync(ct);
         }
 
-        var dto = new MessageDto(msg.Id, msg.ClientMessageId, msg.DialogId, msg.SenderId, msg.Text, msg.MediaUrl, msg.CreatedAt, msg.EditedAt,
-            msg.ReplyToId, msg.ForwardedFromId, msg.ForwardedFromName, msg.Kind, msg.MediaWidth, msg.MediaHeight, msg.MediaDurationMs);
+        var dto = msg.ToDto();
         if (changed)
         {
             var members = await access.GetMemberIdsAsync(msg.DialogId, ct);
-            await hub.Clients.Users(members).SendAsync("MessageEdited", dto, ct);
+            await hub.Clients.Users(members).SendAsync(HubEvents.MessageEdited, dto, ct);
         }
         return dto;
     }
 
     /// <summary>
-    /// Удаление сообщения (как в Telegram). Любой участник диалога может удалить любое сообщение:
-    /// scope=me — скрыть только у себя (собеседник сообщение сохраняет), scope=all (по умолчанию) — удалить у обоих.
+    /// Удаление сообщения: scope=me — скрыть только у себя, scope=all (по умолчанию) — удалить у всех.
+    /// В личном диалоге удалить у обоих может любой участник; в беседе — только автор сообщения или владелец беседы.
     /// </summary>
     [HttpDelete("api/messages/{id}")]
     public async Task<IActionResult> Delete(string id, [FromQuery] string scope = "all", CancellationToken ct = default)
@@ -118,34 +118,45 @@ public sealed class MessagesController(
 
         var me = User.GetUserId();
 
-        var dialogId = await db.Messages.AsNoTracking()
+        var msg = await db.Messages.AsNoTracking()
             .Where(m => m.Id == id && m.DeletedAt == null)
-            .Select(m => m.DialogId)
+            .Select(m => new { m.DialogId, m.SenderId, m.Kind, m.MediaUrl, DialogKind = m.Dialog.Kind })
             .FirstOrDefaultAsync(ct);
         // 404 и для чужого диалога, чтобы не раскрывать существование сообщений
-        if (dialogId is null || !await access.IsMemberAsync(dialogId, me, ct)) return NotFound();
+        if (msg is null || !await access.IsMemberAsync(msg.DialogId, me, ct)) return NotFound();
 
         if (scope == "me")
         {
             await db.Database.ExecuteSqlInterpolatedAsync(
                 $"INSERT INTO message_hides (message_id, user_id) VALUES ({id}, {me}) ON CONFLICT DO NOTHING", ct);
-            // остальным устройствам этого же пользователя
-            await hub.Clients.User(me).SendAsync("MessageDeleted", dialogId, id, ct);
+            await hub.Clients.User(me).SendAsync(HubEvents.MessageDeleted, msg.DialogId, id, ct);
             return NoContent();
+        }
+
+        if (msg.DialogKind == DialogKind.Group)
+        {
+            if (msg.Kind == MessageKind.System)
+                return Problem(statusCode: StatusCodes.Status403Forbidden, title: "System messages cannot be deleted for everyone");
+            if (msg.SenderId != me)
+            {
+                var isOwner = await db.DialogMembers.AsNoTracking()
+                    .AnyAsync(m => m.DialogId == msg.DialogId && m.UserId == me && m.Role == MemberRole.Owner, ct);
+                if (!isOwner)
+                    return Problem(statusCode: StatusCodes.Status403Forbidden, title: "Only the sender or group owner can delete this message for everyone");
+            }
         }
 
         await db.Messages.Where(m => m.Id == id)
             .ExecuteUpdateAsync(s => s.SetProperty(m => m.DeletedAt, (DateTime?)DateTime.UtcNow), ct);
         var unpinned = await db.PinnedMessages.Where(p => p.MessageId == id).ExecuteDeleteAsync(ct);
-        var mediaUrlOfDeleted = await db.Messages.Where(m => m.Id == id).Select(m => m.MediaUrl).FirstOrDefaultAsync(ct);
-        if (MediaKeys.Parse(mediaUrlOfDeleted) is { } media)
+        if (MediaKeys.Parse(msg.MediaUrl) is { } media)
         {
-            try { await storage.DeleteAsync(MediaKeys.Key(media.DialogId, media.Name), ct); }   // вложение удаляем вместе с сообщением
+            try { await storage.DeleteAsync(MediaKeys.Key(media.DialogId, media.Name), ct); }
             catch (Exception ex) { log.LogWarning(ex, "Could not delete media of message {Id}", id); }
         }
-        var members = await access.GetMemberIdsAsync(dialogId, ct);
-        if (unpinned > 0) await hub.Clients.Users(members).SendAsync("MessageUnpinned", dialogId, id, ct);
-        await hub.Clients.Users(members).SendAsync("MessageDeleted", dialogId, id, ct);
+        var members = await access.GetMemberIdsAsync(msg.DialogId, ct);
+        if (unpinned > 0) await hub.Clients.Users(members).SendAsync(HubEvents.MessageUnpinned, msg.DialogId, id, ct);
+        await hub.Clients.Users(members).SendAsync(HubEvents.MessageDeleted, msg.DialogId, id, ct);
 
         return NoContent();
     }
@@ -182,7 +193,7 @@ public sealed class MessagesController(
         if (added > 0)
         {
             var members = await access.GetMemberIdsAsync(dialogId, ct);
-            await hub.Clients.Users(members).SendAsync("MessagePinned", dialogId, found[0], me, ct);
+            await hub.Clients.Users(members).SendAsync(HubEvents.MessagePinned, dialogId, found[0], me, ct);
         }
         return NoContent();
     }
@@ -197,7 +208,7 @@ public sealed class MessagesController(
         if (removed > 0)
         {
             var members = await access.GetMemberIdsAsync(dialogId, ct);
-            await hub.Clients.Users(members).SendAsync("MessageUnpinned", dialogId, messageId, ct);
+            await hub.Clients.Users(members).SendAsync(HubEvents.MessageUnpinned, dialogId, messageId, ct);
         }
         return NoContent();
     }
@@ -228,7 +239,7 @@ public sealed class MessagesController(
         await db.Database.ExecuteSqlInterpolatedAsync(
             $"INSERT INTO message_reactions (message_id, user_id, dialog_id, emoji) VALUES ({messageId}, {me}, {dialogId}, {body.Emoji}) ON CONFLICT (message_id, user_id) DO UPDATE SET emoji = EXCLUDED.emoji, created_at = now()", ct);
         var members = await access.GetMemberIdsAsync(dialogId, ct);
-        await hub.Clients.Users(members).SendAsync("ReactionChanged", dialogId, messageId, me, body.Emoji, ct);
+        await hub.Clients.Users(members).SendAsync(HubEvents.ReactionChanged, dialogId, messageId, me, body.Emoji, ct);
         return NoContent();
     }
 
@@ -242,7 +253,7 @@ public sealed class MessagesController(
         if (removed > 0)
         {
             var members = await access.GetMemberIdsAsync(dialogId, ct);
-            await hub.Clients.Users(members).SendAsync("ReactionChanged", dialogId, messageId, me, (string?)null, ct);
+            await hub.Clients.Users(members).SendAsync(HubEvents.ReactionChanged, dialogId, messageId, me, (string?)null, ct);
         }
         return NoContent();
     }
@@ -262,7 +273,7 @@ public sealed class MessagesController(
             return Problem(statusCode: StatusCodes.Status400BadRequest, title: "messageIds must be valid ULIDs");
         var source = await messages.GetByIdsAsync(dialogId, me, ids, ct);
         if (source.Count != ids.Count) return NotFound();
-        if (source.Any(m => m.Kind == "system")) return Problem(statusCode: StatusCodes.Status400BadRequest, title: "System messages cannot be forwarded");
+        if (source.Any(m => m.Kind == MessageKind.System)) return Problem(statusCode: StatusCodes.Status400BadRequest, title: "System messages cannot be forwarded");
 
         var authorIds = source.Where(m => m.ForwardedFromId is null).Select(m => m.SenderId).Distinct().ToList();
         var names = await db.Users.AsNoTracking().Where(u => authorIds.Contains(u.Id)).ToDictionaryAsync(u => u.Id, u => u.DisplayName, ct);
@@ -299,14 +310,14 @@ public sealed class MessagesController(
                 SenderId: me,
                 Text: m.Text,
                 MediaUrl: mediaUrl,
-                Kind: mediaUrl is null ? "text" : m.Kind,
+                Kind: mediaUrl is null ? MessageKind.Text : m.Kind,
                 MediaWidth: mediaUrl is null ? null : m.MediaWidth,
                 MediaHeight: mediaUrl is null ? null : m.MediaHeight,
                 MediaDurationMs: mediaUrl is null ? null : m.MediaDurationMs,
                 ForwardedFromId: m.ForwardedFromId ?? m.SenderId,
                 ForwardedFromName: m.ForwardedFromName ?? (names.TryGetValue(m.SenderId, out var n) ? n : null)), ct);
             result.Add(saved.Message);
-            if (saved.IsNew) await hub.Clients.Users(members).SendAsync("MessageReceived", saved.Message, ct);
+            if (saved.IsNew) await hub.Clients.Users(members).SendAsync(HubEvents.MessageReceived, saved.Message, ct);
         }
         return Ok(result);
     }
@@ -324,28 +335,31 @@ public sealed class MessagesController(
     {
         var me = User.GetUserId();
         if (!await access.IsMemberAsync(dialogId, me, ct)) return NotFound();
-        if (form.Kind is not ("image" or "voice") || form.File.Length == 0 || form.File.Length > (form.Kind == "voice" ? MaxVoiceBytes : MaxMediaUpload))
+        if (form.Kind is not (MessageKind.Image or MessageKind.Voice) || form.File.Length == 0 || form.File.Length > (form.Kind == MessageKind.Voice ? MaxVoiceBytes : MaxMediaUpload))
             return Problem(statusCode: StatusCodes.Status400BadRequest, title: "Send an image (up to 10 MB) or a voice message (up to 3 MB)");
         if (form.ReplyToId is not null && (!Ulid.TryParse(form.ReplyToId, out _) || !await messages.ExistsInDialogAsync(dialogId, form.ReplyToId, ct)))
             return Problem(statusCode: StatusCodes.Status400BadRequest, title: "invalid_reply_to");
 
-        byte[] data; string ext, contentType; int? w = null, h = null, duration = null;
+        MemoryStream uploadStream; string ext, contentType; int? w = null, h = null, duration = null;
         try
         {
             await using var s = form.File.OpenReadStream();
-            if (form.Kind == "image")
+            if (form.Kind == MessageKind.Image)
             {
                 var photo = await Task.Run(() => ImageProcessor.Photo(s), ct);
-                (data, w, h, ext, contentType) = (photo.Data, photo.Width, photo.Height, "webp", "image/webp");
+                (uploadStream, w, h, ext, contentType) = (new MemoryStream(photo.Data), photo.Width, photo.Height, "webp", "image/webp");
             }
             else
             {
-                var ms = new MemoryStream();
+                var ms = new MemoryStream((int)form.File.Length);
                 await s.CopyToAsync(ms, ct);
-                data = ms.ToArray();
-                if (VoiceFormat.Detect(data) is not { } fmt)
+                if (!ms.TryGetBuffer(out var seg) || VoiceFormat.Detect(seg.AsSpan()) is not { } fmt)
+                {
+                    await ms.DisposeAsync();
                     return Problem(statusCode: StatusCodes.Status400BadRequest, title: "Unsupported audio format");
-                (ext, contentType) = fmt;
+                }
+                ms.Position = 0;
+                (uploadStream, ext, contentType) = (ms, fmt.Ext, fmt.ContentType);
                 duration = Math.Clamp(form.DurationMs ?? 0, 0, 600_000);
             }
         }
@@ -357,8 +371,11 @@ public sealed class MessagesController(
         var id = Ulid.NewUlid().ToString();
         var name = $"{id}.{ext}";
         var key = MediaKeys.Key(dialogId, name);
-        try { await storage.PutAsync(key, new MemoryStream(data), data.Length, contentType, ct); }
-        catch (StorageNotConfiguredException) { return Problem(statusCode: StatusCodes.Status503ServiceUnavailable, title: "File storage is not available"); }
+        await using (uploadStream)
+        {
+            try { await storage.PutAsync(key, uploadStream, uploadStream.Length, contentType, ct); }
+            catch (StorageNotConfiguredException) { return Problem(statusCode: StatusCodes.Status503ServiceUnavailable, title: "File storage is not available"); }
+        }
 
         var saved = await messages.SaveAsync(new NewMessage(
             Id: id, ClientMessageId: form.ClientMessageId, DialogId: dialogId, SenderId: me, Text: (form.Text ?? "").Trim(),
@@ -369,7 +386,7 @@ public sealed class MessagesController(
             await storage.DeleteAsync(key, ct);   // повтор того же запроса: лишний файл не оставляем
             return Ok(saved.Message);
         }
-        await hub.Clients.Users(await access.GetMemberIdsAsync(dialogId, ct)).SendAsync("MessageReceived", saved.Message, ct);
+        await hub.Clients.Users(await access.GetMemberIdsAsync(dialogId, ct)).SendAsync(HubEvents.MessageReceived, saved.Message, ct);
         return Ok(saved.Message);
     }
 }
